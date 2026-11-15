@@ -6,11 +6,18 @@ mkdir -p /opt/var/keenetic-smb-ui/log /opt/etc/keenetic-smb-ui
 CFG=/opt/etc/keenetic-smb-ui/config.json
 # A wiped config used to look exactly like "all disks disappeared": restore the
 # rolling backup when the package install replaced it.
-if [ ! -s "$CFG" ]; then
-  for b in "$CFG.bak-auto" "$CFG.bak-setpass"; do
-    if [ -s "$b" ]; then cp -a "$b" "$CFG"; echo "keenetic-smb-ui: restored config from $b"; break; fi
-  done
-fi
+# opkg replaces the conffile with the packaged default on reinstall, so a missing
+# file is not the only failure mode: the backup is also restored when the shipped
+# default is smaller than what we saved before the upgrade.
+for b in "$CFG.bak-auto" "$CFG.bak-setpass"; do
+  [ -s "$b" ] || continue
+  if [ ! -s "$CFG" ] || [ "$(wc -c < "$b")" -gt "$(wc -c < "$CFG")" ]; then
+    cp -a "$CFG" "$CFG.installed-default" 2>/dev/null || true
+    cp -a "$b" "$CFG"
+    echo "keenetic-smb-ui: restored config from $b"
+    break
+  fi
+done
 chmod 600 /opt/etc/keenetic-smb-ui/config.json 2>/dev/null || true
 /opt/etc/init.d/S99keenetic-smb-ui start >/dev/null 2>&1 || true
 echo "keenetic-smb-ui: панель на http://<ip-роутера>:8099 (admin/1235467890)"

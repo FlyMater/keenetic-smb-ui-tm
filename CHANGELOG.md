@@ -4,6 +4,14 @@ All notable changes are documented here. Versions follow `MAJOR.MINOR.PATCH`;
 every release publishes `.ipk` packages for all supported Entware architectures plus
 `Packages` / `Packages.gz` for use as an opkg feed.
 
+## 1.6.2 — обновление пакета больше не затирает конфиг
+
+- `postinst` сравнивает восстановленную копию `config.json.bak-auto` с тем, что
+  положил пакет: если установленный файл меньше сохранённого (то есть это дефолт),
+  конфиг откатывается на сохранённый. Проверено циклом
+  `opkg install --force-reinstall`: диски, пароли и настройки остаются на месте.
+- Первый установочный дефолт сохраняется рядом как `config.json.installed-default`
+  — пригодится для диагностики.
 ## 1.6.1 — диски возвращаются сами, конфиг больше не теряется
 
 - **Автомонтирование**: фоновая проверка раз в 30 секунд добирает отвалившиеся
