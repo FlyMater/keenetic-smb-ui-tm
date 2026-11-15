@@ -2,6 +2,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,8 @@ type Server struct {
 	stats    *stats.Collector
 	sessions *sessions
 	http     *http.Server
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // New wires the server.
@@ -39,12 +42,15 @@ func New(cfg *config.Config) (*Server, error) {
 	for _, r := range cfg.Remotes {
 		paths = append(paths, sh.MountPoint(r))
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:      cfg,
 		smb:      samba.New(cfg),
 		shares:   sh,
 		stats:    stats.New(cfg.Stats.HistoryLen, paths),
 		sessions: newSessions(),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 	startSizeWorker()
 	mux := http.NewServeMux()
@@ -99,6 +105,9 @@ func (s *Server) Run() error {
 func (s *Server) Shutdown(d time.Duration) error {
 	ctx, cancel := contextWithTimeout(d)
 	defer cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return s.http.Shutdown(ctx)
 }
 
@@ -124,9 +133,10 @@ func (s *Server) Bootstrap() {
 		if err := s.smb.Start(); err != nil {
 			log.Printf("bootstrap: smbd: %v", err)
 		}
-		for _, e := range s.shares.Apply() {
-			log.Printf("bootstrap: share: %v", e)
-		}
+		// Mounts are reconciled in the background: a Proxmox host that is off
+		// during boot must not delay Samba or the UI. Watch keeps retrying and
+		// mounts each disk as soon as it answers.
+		go s.shares.Watch(s.ctx, 30*time.Second)
 		log.Printf("bootstrap: done, smb=%s", s.smb.Status())
 	}()
 }
@@ -149,13 +159,13 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	snap := s.stats.Sample()
 	writeJSON(w, map[string]any{
-		"service":  s.smb.Status(),
-		"smb_ip":   s.cfg.SMB.ListenIP,
-		"share":    s.cfg.SMB.ShareName,
-		"root":     s.shares.Root(),
-		"stats":    snap,
-		"remotes":  s.shares.Statuses(),
-		"version":  Version,
+		"service": s.smb.Status(),
+		"smb_ip":  s.cfg.SMB.ListenIP,
+		"share":   s.cfg.SMB.ShareName,
+		"root":    s.shares.Root(),
+		"stats":   snap,
+		"remotes": s.shares.Statuses(),
+		"version": Version,
 	})
 }
 

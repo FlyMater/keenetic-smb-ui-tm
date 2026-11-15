@@ -3,24 +3,99 @@
 package shares
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tommilevs/keenetic-smb-ui/internal/config"
 )
 
 // Manager reconciles configured remotes with the running mounts.
 type Manager struct {
-	mu  sync.Mutex
-	cfg *config.Config
+	mu       sync.Mutex
+	cfg      *config.Config
+	lastErr  map[string]string // remote id -> last mount error
+	failures map[string]int    // remote id -> consecutive failed attempts
 }
 
 // New returns a manager bound to the live configuration.
-func New(cfg *config.Config) *Manager { return &Manager{cfg: cfg} }
+func New(cfg *config.Config) *Manager {
+	return &Manager{cfg: cfg, lastErr: map[string]string{}, failures: map[string]int{}}
+}
+
+// Ensure mounts every enabled remote that is currently missing, without
+// touching the ones that are already mounted. Errors are recorded per remote so
+// one broken host never blocks the others or the SMB service.
+func (m *Manager) Ensure() []error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var errs []error
+	if err := ensureCIFS(); err != nil {
+		errs = append(errs, err)
+	}
+	for _, r := range m.cfg.Remotes {
+		if !r.Enabled {
+			continue
+		}
+		mp := m.MountPoint(r)
+		if isMounted(mp) {
+			delete(m.lastErr, r.ID)
+			m.failures[r.ID] = 0
+			continue
+		}
+		if err := os.MkdirAll(mp, 0o755); err != nil {
+			m.lastErr[r.ID] = err.Error()
+			errs = append(errs, err)
+			continue
+		}
+		if err := mountRemote(r, mp); err != nil {
+			m.failures[r.ID]++
+			m.lastErr[r.ID] = err.Error()
+			errs = append(errs, fmt.Errorf("%s: %w", r.Name, err))
+			continue
+		}
+		delete(m.lastErr, r.ID)
+		m.failures[r.ID] = 0
+		log.Printf("share %s: mounted %s", r.Name, mp)
+	}
+	return errs
+}
+
+// Watch keeps retrying missing remotes until ctx is cancelled: a host that was
+// off during boot is mounted as soon as it answers again.
+func (m *Manager) Watch(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	m.Ensure() // first pass right away; failures are not fatal
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			errs := m.Ensure()
+			for _, e := range errs {
+				log.Printf("share retry: %v", e)
+			}
+		}
+	}
+}
+
+// RetryCount returns how many times a remote has failed in a row (for the UI).
+func (m *Manager) RetryCount(id string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.failures[id]
+}
 
 // Root returns the aggregated share root.
 func (m *Manager) Root() string {
@@ -114,16 +189,23 @@ type Status struct {
 	Target  string `json:"target"`
 	Mounted bool   `json:"mounted"`
 	Error   string `json:"error,omitempty"`
+	Retries int    `json:"retries,omitempty"`
 }
 
 // Statuses returns the current mount state of all remotes.
 func (m *Manager) Statuses() []Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	out := make([]Status, 0, len(m.cfg.Remotes))
 	for _, r := range m.cfg.Remotes {
 		mp := m.MountPoint(r)
 		st := Status{ID: r.ID, Name: r.Name, Target: mp, Mounted: isMounted(mp)}
 		if !st.Mounted && r.Enabled {
-			st.Error = "not mounted"
+			st.Error = m.lastErr[r.ID]
+			if st.Error == "" {
+				st.Error = "не смонтирован"
+			}
+			st.Retries = m.failures[r.ID]
 		}
 		out = append(out, st)
 	}

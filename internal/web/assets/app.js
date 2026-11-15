@@ -185,7 +185,16 @@ function renderRemoteStatus(list) {
     const cell = tr.querySelector('.status');
     if (!cell) return;
     if (!st) { cell.innerHTML = '<span class="pill">—</span>'; return; }
-    cell.innerHTML = st.mounted ? '<span class="pill ok">подключён</span>' : '<span class="pill warn">не смонтирован</span>';
+    if (st.mounted) {
+      cell.innerHTML = '<span class="pill ok">подключён</span>';
+      cell.title = '';
+      return;
+    }
+    // A missing mount is not fatal: the app retries every 30 seconds and mounts
+    // the disk as soon as the host answers again.
+    const retries = st.retries ? `, попыток: ${st.retries}` : '';
+    cell.innerHTML = `<span class="pill warn" title="Автоматически переподключается каждые 30 секунд${retries ? ', ' + st.retries + ' неудачных попыток' : ''}">не смонтирован</span>`;
+    cell.title = `${st.error || 'не смонтирован'}${retries}\nПовтор каждые 30 с — диск появится сам, когда хост снова ответит.`;
   });
 }
 

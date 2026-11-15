@@ -50,6 +50,9 @@ pid/state/private directories — the router's SMB keeps working exactly as befo
   files and folders, live statistics with charts, Samba log, updates.
 - **Statistics**: load average, memory, network throughput, SMB sessions, disk usage
   and history for charts, sampled from `/proc` and `smbstatus`.
+- **Self-healing mounts**: a background loop retries missing disks every 30 s and
+  mounts them as soon as the host answers; a broken remote is reported in the status
+  column and never stops Samba or the other disks.
 - **Self-update**: the panel checks GitHub Releases, downloads the matching `.ipk`,
   installs it with `opkg` and restarts the service.
 - **One static binary**, no cgo, no runtime dependencies besides Samba and libc.

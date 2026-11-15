@@ -70,9 +70,9 @@ type Stats struct {
 
 // Paths describes runtime locations (not user editable via UI).
 type Paths struct {
-	ConfigFile string `json:"-"`
-	DataDir    string `json:"-"`
-	SambaConf  string `json:"samba_conf"`
+	ConfigFile  string `json:"-"`
+	DataDir     string `json:"-"`
+	SambaConf   string `json:"samba_conf"`
 	SambaPidDir string `json:"samba_pid_dir"`
 }
 
@@ -82,12 +82,12 @@ type Folder = acl.Folder
 
 // Config is the root document persisted to disk.
 type Config struct {
-	Web     Web     `json:"web"`
-	SMB     SMB     `json:"smb"`
+	Web     Web      `json:"web"`
+	SMB     SMB      `json:"smb"`
 	Remotes []Remote `json:"remotes"`
 	Folders []Folder `json:"folders"`
-	Stats   Stats   `json:"stats"`
-	Paths   Paths   `json:"paths"`
+	Stats   Stats    `json:"stats"`
+	Paths   Paths    `json:"paths"`
 }
 
 // mu serialises Save/Update across goroutines without living inside Config
@@ -216,6 +216,11 @@ func (c *Config) saveLocked() error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
+	}
+	// Keep a rolling copy of the previous file: a wiped or replaced config is
+	// the difference between "disks disappeared" and a two-second restore.
+	if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
+		_ = os.WriteFile(path+".bak-auto", old, 0o600)
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
