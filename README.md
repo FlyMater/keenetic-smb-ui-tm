@@ -152,6 +152,12 @@ UI details worth knowing:
   only where settings are written to `smb.conf`.
 - **Auto-refresh switch**: turn the 5-second polling on or off; the choice is stored in
   the browser.
+- **Languages**: the UI ships Russian and English. Dictionaries are plain JSON files
+  in `/opt/etc/keenetic-smb-ui/locales/` (`ru.json`, `en.json`); drop your own
+  `xx.json` with a `_label` key and it appears in the switcher. Missing keys fall back
+  to Russian, and new keys from updates are merged without overwriting your edits.
+- **Links & support**: the Settings page links to the GitHub repo, releases, the
+  Keenetic forum topic and GitHub Issues for bug reports.
 - **Hover hints**: column headers and the `?` next to **RO** explain what each field
   does (RO = read-only mount: browse and copy yes, write no).
 

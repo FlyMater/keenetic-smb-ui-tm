@@ -39,6 +39,7 @@
       <button class="nav" data-view="settings">Настройки</button>
     </nav>
     <div class="sidefoot">
+      <select id="lang" class="lang-select" aria-label="Язык интерфейса" title="Язык интерфейса"></select>
       <span id="ver">v—</span>
       <span id="srvdot" class="dot"></span><span id="srvtext">…</span>
       <button id="btn-logout" class="linklike" title="Выйти">выйти</button>
@@ -49,11 +50,6 @@
     <header class="top">
       <h1 id="title">Обзор</h1>
       <div class="top-actions">
-        <label class="switch" id="autorefresh-wrap" title="Обновлять данные по таймеру">
-          <input type="checkbox" id="autorefresh" checked>
-          <span class="track" aria-hidden="true"></span>
-          <span class="switch-label">Автообновление</span>
-        </label>
         <button class="btn ghost" id="btn-refresh" title="Перечитать данные с роутера прямо сейчас">Обновить</button>
         <button class="btn primary" id="btn-apply" title="Записать настройки в SMB и перезапустить службу">Применить</button>
       </div>
@@ -220,6 +216,32 @@
           <button class="btn primary" id="upd-install">Установить</button>
         </div>
         <p class="hint" id="upd-msg" aria-live="polite">Текущая версия: <span id="upd-current">—</span></p>
+      </article>
+      <article class="card wide">
+        <h3>Автообновление данных</h3>
+        <label class="switch" id="autorefresh-wrap" title="Обновлять данные по таймеру">
+          <input type="checkbox" id="autorefresh" checked>
+          <span class="track" aria-hidden="true"></span>
+          <span class="switch-label">Обновлять данные по таймеру</span>
+        </label>
+        <p class="hint">Включает опрос панели раз в 5 секунд на страницах «Обзор», «Общие диски» и «Статистика». Выбор хранится в браузере.</p>
+      </article>
+      <article class="card wide">
+        <h3>Язык интерфейса</h3>
+        <div class="row">
+          <select id="lang-settings" aria-label="Язык интерфейса"></select>
+        </div>
+        <p class="hint">Переводы лежат рядом: /opt/etc/keenetic-smb-ui/locales — положите свой xx.json с ключом _label, он появится в списке.</p>
+      </article>
+      <article class="card wide">
+        <h3>Ссылки и поддержка</h3>
+        <p class="hint">Нашли баг или есть идея? Откройте issue — это самый быстрый путь к исправлению.</p>
+        <div class="row">
+          <a class="btn ghost" href="https://github.com/tommilevs/keenetic-smb-ui" target="_blank" rel="noopener">GitHub</a>
+          <a class="btn ghost" href="https://github.com/tommilevs/keenetic-smb-ui/releases" target="_blank" rel="noopener">Релизы</a>
+          <a class="btn ghost" href="https://forum.keenetic.ru/topic/31542-keenetic-smb-ui/" target="_blank" rel="noopener">Форум Keenetic</a>
+          <a class="btn primary" href="https://github.com/tommilevs/keenetic-smb-ui/issues/new/choose" target="_blank" rel="noopener">GitHub Issues</a>
+        </div>
       </article>
       <article class="card wide">
         <h3>Сохранить конфигурацию</h3>

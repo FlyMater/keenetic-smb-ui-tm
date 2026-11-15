@@ -8,7 +8,6 @@ const state = { cfg: null, status: null, view: 'overview', timer: null, autorefr
 const TOOLBAR = {
   refresh: ['overview', 'shares', 'users', 'stats'],
   apply: ['smb', 'shares', 'settings'],
-  autorefresh: ['overview', 'stats', 'shares'],
 };
 
 const VIEW_TITLES = {
@@ -66,6 +65,7 @@ function show(view) {
   if (view === 'acl') loadAcl();
   if (view === 'settings' || view === 'smb' || view === 'shares' || view === 'users') fillForms();
   if (view !== 'logs' && view !== 'acl') refresh();
+  refreshI18nSoon();
 }
 
 // Hide controls that do nothing on the current page.
@@ -73,8 +73,6 @@ function updateToolbar(view) {
   const has = (k) => (TOOLBAR[k] || []).includes(view);
   $('btn-refresh').classList.toggle('hidden', !has('refresh'));
   $('btn-apply').classList.toggle('hidden', !has('apply'));
-  const ar = $('autorefresh-wrap');
-  if (ar) ar.classList.toggle('hidden', !has('autorefresh'));
 }
 
 function setAutoRefresh(on) {
@@ -88,6 +86,106 @@ function setAutoRefresh(on) {
 function currentView() {
   const v = (location.hash || '').replace('#', '');
   return VIEW_TITLES[v] ? v : 'overview';
+}
+
+
+/* ── i18n: dictionary files live next to the config on the router ────────── */
+
+const I18N = { code: 'ru', dict: {}, languages: [], dir: '' };
+const i18nTextOrig = new WeakMap();
+const i18nAttrOrig = new WeakMap();
+
+function t(s) {
+  return (I18N.dict && I18N.dict[s]) || s;
+}
+
+// applyI18n walks text nodes and a few attributes, always translating from the
+// original value, so switching ru → en → ru is lossless.
+function applyI18n(root) {
+  const dict = I18N.dict || {};
+  const scope = root || document.body;
+  if (!scope) return;
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const n of nodes) {
+    if (!n.nodeValue) continue;
+    if (i18nTextOrig.has(n)) { /* keep original */ } else { i18nTextOrig.set(n, n.nodeValue); }
+    const orig = i18nTextOrig.get(n);
+    const key = orig.trim();
+    if (!key) continue;
+    const val = dict[key];
+    if (val) {
+      const lead = orig.match(/^\s*/)[0];
+      const tail = orig.match(/\s*$/)[0];
+      n.nodeValue = lead + val + tail;
+    } else {
+      n.nodeValue = orig;
+    }
+  }
+  if (dict['Keenetic SMB · панель']) document.title = dict['Keenetic SMB · панель'];
+  scope.querySelectorAll('[title],[placeholder],[aria-label]').forEach((el) => {
+    let saved = i18nAttrOrig.get(el);
+    if (!saved) { saved = {}; i18nAttrOrig.set(el, saved); }
+    for (const attr of ['title', 'placeholder', 'aria-label']) {
+      const cur = el.getAttribute(attr);
+      if (cur === null) continue;
+      if (!(attr in saved)) saved[attr] = cur;
+      const orig = saved[attr];
+      const val = dict[attr + '||' + orig.trim()];
+      el.setAttribute(attr, val || orig);
+    }
+  });
+}
+
+function renderLangSwitchers() {
+  const opts = (I18N.languages || []).map((l) => `<option value="${l.code}">${l.label}</option>`).join('');
+  for (const id of ['lang', 'lang-settings']) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = opts;
+    el.value = I18N.code;
+    el.onchange = () => setLang(el.value);
+  }
+  const dir = $('lang-dir');
+  if (dir && I18N.dir) dir.textContent = I18N.dir;
+}
+
+async function setLang(code) {
+  I18N.code = code;
+  localStorage.setItem('ksmbui.lang', code);
+  try {
+    const res = await fetch('/api/locales/' + code, { cache: 'no-store' });
+    I18N.dict = res.ok ? await res.json() : {};
+  } catch (e) {
+    I18N.dict = {};
+  }
+  applyI18n(document.body);
+  renderLangSwitchers();
+  if (state.cfg || state.status) {
+    fillForms();
+    if (state.view === 'acl') loadAcl();
+    if (state.view === 'logs') loadLogs();
+    refresh();
+  }
+}
+
+function refreshI18nSoon() { setTimeout(() => applyI18n(document.body), 60); }
+
+async function initI18n() {
+  let meta = { languages: [{ code: 'ru', label: 'Русский' }], default: 'ru', dir: '' };
+  try {
+    meta = await fetch('/api/locales', { cache: 'no-store' }).then((r) => r.json());
+  } catch (e) { /* keep the built-in default */ }
+  I18N.languages = meta.languages || [];
+  I18N.dir = meta.dir || '';
+  const saved = localStorage.getItem('ksmbui.lang');
+  const nav = (navigator.language || 'ru').slice(0, 2).toLowerCase();
+  let code = saved;
+  if (!code || !I18N.languages.some((l) => l.code === code)) {
+    code = I18N.languages.some((l) => l.code === nav) ? nav : (meta.default || 'ru');
+  }
+  await setLang(code);
 }
 
 function fmtBytes(n) {
@@ -172,6 +270,7 @@ async function refresh() {
     }).join('') || '<tr><td colspan="4" class="hint">нет данных</td></tr>';
 
     if (state.view === 'shares') renderRemoteStatus(st.remotes);
+    applyI18n(document.body);
   } catch (e) {
     $('srvdot').className = 'dot err';
     $('srvtext').textContent = 'нет связи с API';
@@ -727,6 +826,7 @@ async function loadLogs() {  try {
 
 async function boot() {
   $('login-form').addEventListener('submit', doLogin);
+  await initI18n();
   try {
     const s = await fetch('/api/session', { credentials: 'same-origin' }).then((r) => r.json());
     if (s.authenticated) {

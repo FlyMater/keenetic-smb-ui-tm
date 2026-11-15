@@ -52,8 +52,11 @@ func New(cfg *config.Config) (*Server, error) {
 		ctx:      ctx,
 		cancel:   cancel,
 	}
+	s.materializeLocales()
 	startSizeWorker()
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/locales", s.handleLocales)
+	mux.HandleFunc("/api/locales/", s.handleLocale)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.HandleFunc("/api/session", s.handleSession)
