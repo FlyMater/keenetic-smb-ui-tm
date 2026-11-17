@@ -164,6 +164,26 @@ Entware ждёт legacy-формат ipkg, а не Debian-архив `ar`.
 - **Подсказки**: заголовки колонок и знак «?» у **RO** объясняют, что делает поле
   (RO = монтирование только для чтения: смотреть и копировать можно, записывать нет).
 
+## Скриншоты
+
+Всё снято на живом Keenetic Ultra (aarch64, Entware), панель на `192.168.165.1:8099`.
+
+| Обзор | Общие диски |
+|---|---|
+| <img src="docs/screenshots/02-overview.png" width="440" alt="Обзор"> | <img src="docs/screenshots/04-disks.png" width="440" alt="Общие диски"> |
+
+| SMB-сервер | Файлы и папки |
+|---|---|
+| <img src="docs/screenshots/03-smb-server.png" width="440" alt="SMB-сервер"> | <img src="docs/screenshots/06-files-and-folders.png" width="440" alt="Файлы и папки"> |
+
+| Пользователи | Статистика |
+|---|---|
+| <img src="docs/screenshots/05-users.png" width="440" alt="Пользователи"> | <img src="docs/screenshots/07-statistics.png" width="440" alt="Статистика"> |
+
+| Настройки (ссылки, язык, автообновление) | Вход |
+|---|---|
+| <img src="docs/screenshots/08-settings.png" width="440" alt="Настройки"> | <img src="docs/screenshots/01-login.png" width="440" alt="Вход"> |
+
 ## Агрегированные диски
 
 Любая SMB-шара, доступная с роутера, монтируется в экспортируемое дерево:

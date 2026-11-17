@@ -161,6 +161,27 @@ UI details worth knowing:
 - **Hover hints**: column headers and the `?` next to **RO** explain what each field
   does (RO = read-only mount: browse and copy yes, write no).
 
+## Screenshots
+
+All shots are from a live Keenetic Ultra (aarch64, Entware) running the panel on
+`192.168.165.1:8099`.
+
+| Overview | Disks |
+|---|---|
+| <img src="docs/screenshots/02-overview.png" width="440" alt="Overview"> | <img src="docs/screenshots/04-disks.png" width="440" alt="Disks"> |
+
+| SMB server | Files and folders |
+|---|---|
+| <img src="docs/screenshots/03-smb-server.png" width="440" alt="SMB server settings"> | <img src="docs/screenshots/06-files-and-folders.png" width="440" alt="Files and folders"> |
+
+| Users | Statistics |
+|---|---|
+| <img src="docs/screenshots/05-users.png" width="440" alt="Users"> | <img src="docs/screenshots/07-statistics.png" width="440" alt="Statistics"> |
+
+| Settings (links, language, auto-refresh) | Login |
+|---|---|
+| <img src="docs/screenshots/08-settings.png" width="440" alt="Settings"> | <img src="docs/screenshots/01-login.png" width="440" alt="Login"> |
+
 ## Aggregated disks
 
 Any SMB share reachable from the router can be mounted into the exported tree:
