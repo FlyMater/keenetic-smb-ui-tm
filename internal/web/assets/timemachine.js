@@ -44,7 +44,8 @@ function tmRenderDiagnostics(report) {
     smb: 'Служба SMB', disk: 'USB-том', permissions: 'Права доступа',
     xattr: 'Расширенные атрибуты', limit_gib: 'Лимит копий, ГиБ',
     smb_url: 'Адрес SMB', bonjour: 'Bonjour', disk_error: 'Проверка тома',
-    bonjour_error: 'Проверка Bonjour',
+    bonjour_error: 'Проверка Bonjour', apply_error: 'Ошибка применения',
+    recovery_error: 'Ошибка восстановления',
   };
   const states = {
     running: 'работает', stopped: 'остановлен', disabled: 'отключено', ready: 'Доступен',

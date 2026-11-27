@@ -36,12 +36,30 @@ func NewTransaction(dir string, paths ...string) (*Transaction, error) {
 	return &Transaction{dir: dir, paths: paths}, nil
 }
 
-func (t *Transaction) Capture() error {
-	if t.Pending() {
+// Prepare journals account creation while the existing smbd is still running.
+func (t *Transaction) Prepare() error {
+	pending := filepath.Join(t.dir, "pending")
+	if _, err := os.Stat(pending); err == nil {
 		return errors.New("an unfinished Time Machine transaction requires recovery")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if err := os.Remove(filepath.Join(t.dir, "account")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	return writeAtomic(pending, []byte("null"))
+}
+
+// Capture replaces the preparation marker after smbd has stopped, so the
+// passdb backup is taken with no live writers.
+func (t *Transaction) Capture() error {
+	pending := filepath.Join(t.dir, "pending")
+	data, err := os.ReadFile(pending)
+	if err != nil {
+		return err
+	}
+	if string(data) != "null" {
+		return errors.New("an unfinished Time Machine transaction requires recovery")
 	}
 	existed := make([]bool, len(t.paths))
 	for i, path := range t.paths {
@@ -58,11 +76,11 @@ func (t *Transaction) Capture() error {
 		}
 		existed[i] = true
 	}
-	data, err := json.Marshal(existed)
+	data, err = json.Marshal(existed)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(t.dir, "pending"), data)
+	return writeAtomic(pending, data)
 }
 
 func (t *Transaction) snapshot(i int) string {
@@ -78,6 +96,9 @@ func (t *Transaction) Restore() error {
 	data, err := os.ReadFile(filepath.Join(t.dir, "pending"))
 	if err != nil {
 		return err
+	}
+	if string(data) == "null" {
+		return nil
 	}
 	var existed []bool
 	if err := json.Unmarshal(data, &existed); err != nil || len(existed) != len(t.paths) {
