@@ -40,7 +40,7 @@ func (m *Manager) Ensure() []error {
 	if err := ensureCIFS(); err != nil {
 		errs = append(errs, err)
 	}
-	for _, r := range m.cfg.Remotes {
+	for _, r := range m.cfg.Snapshot().Remotes {
 		if !r.Enabled {
 			continue
 		}
@@ -99,7 +99,7 @@ func (m *Manager) RetryCount(id string) int {
 
 // Root returns the aggregated share root.
 func (m *Manager) Root() string {
-	root := m.cfg.SMB.SharePath
+	root := m.cfg.Snapshot().SMB.SharePath
 	if root == "" {
 		root = "/opt/var/keenetic-smb-ui/share"
 	}
@@ -135,23 +135,26 @@ func (m *Manager) Apply() []error {
 		return []error{err}
 	}
 
-	// symlink local router disks (/tmp/mnt/*) as top-level folders
-	if entries, err := os.ReadDir("/tmp/mnt"); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			src := filepath.Join("/tmp/mnt", e.Name())
-			dst := filepath.Join(root, "local-"+e.Name())
-			if _, err := os.Lstat(dst); os.IsNotExist(err) {
-				if err := os.Symlink(src, dst); err != nil {
-					errs = append(errs, fmt.Errorf("symlink %s: %w", dst, err))
+	cfg := m.cfg.Snapshot()
+	// Samba suppresses legacy USB entries while Time Machine is active.
+	if cfg.TimeMachine == nil || !cfg.TimeMachine.Enabled {
+		if entries, err := os.ReadDir("/tmp/mnt"); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				src := filepath.Join("/tmp/mnt", e.Name())
+				dst := filepath.Join(root, "local-"+e.Name())
+				if _, err := os.Lstat(dst); os.IsNotExist(err) {
+					if err := os.Symlink(src, dst); err != nil {
+						errs = append(errs, fmt.Errorf("symlink %s: %w", dst, err))
+					}
 				}
 			}
 		}
 	}
 
-	for _, r := range m.cfg.Remotes {
+	for _, r := range cfg.Remotes {
 		mp := m.MountPoint(r)
 		mounted := isMounted(mp)
 		switch {
@@ -174,7 +177,7 @@ func (m *Manager) Apply() []error {
 
 // UnmountAll unmounts every configured remote (used on shutdown).
 func (m *Manager) UnmountAll() {
-	for _, r := range m.cfg.Remotes {
+	for _, r := range m.cfg.Snapshot().Remotes {
 		mp := m.MountPoint(r)
 		if isMounted(mp) {
 			_ = exec.Command("umount", mp).Run()
@@ -196,8 +199,9 @@ type Status struct {
 func (m *Manager) Statuses() []Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]Status, 0, len(m.cfg.Remotes))
-	for _, r := range m.cfg.Remotes {
+	remotes := m.cfg.Snapshot().Remotes
+	out := make([]Status, 0, len(remotes))
+	for _, r := range remotes {
 		mp := m.MountPoint(r)
 		st := Status{ID: r.ID, Name: r.Name, Target: mp, Mounted: isMounted(mp)}
 		if !st.Mounted && r.Enabled {

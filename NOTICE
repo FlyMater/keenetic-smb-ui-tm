@@ -27,5 +27,6 @@ Third-party components
 ----------------------
 - Samba (samba4-server / samba4-client) — GPL-3.0-or-later, installed from the
   Entware feed as a runtime dependency; not bundled with this package.
-- cifs-utils — GPL-2.0-or-later, runtime dependency from Entware.
+- cifs-utils — GPL-2.0-or-later, optional system tools.
+- godbus/dbus — BSD-2-Clause, statically linked. See packaging/licenses/godbus-dbus.txt.
 - Go standard library — BSD-3-Clause, statically linked at build time.

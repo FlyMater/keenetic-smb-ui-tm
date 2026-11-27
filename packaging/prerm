@@ -1,12 +1,15 @@
 #!/bin/sh
-# prerm: stop the service before removing/replacing files.
-set -e
-/opt/etc/init.d/S99keenetic-smb-ui stop >/dev/null 2>&1 || true
-
-# opkg may replace the conffile on upgrade/reinstall: keep a copy so postinst can
-# restore it. Losing config.json looks exactly like "all disks disappeared".
-CFG=/opt/etc/keenetic-smb-ui/config.json
-if [ -s "$CFG" ]; then
-  cp -a "$CFG" "$CFG.bak-auto" 2>/dev/null || true
+set -eu
+ROOT=${IPKG_INSTROOT:-}
+BASE="$ROOT/opt/etc/keenetic-smb-ui"
+CFG="$BASE/config.json"
+if [ -z "$ROOT" ]; then
+  "$ROOT/opt/etc/init.d/S99keenetic-smb-ui" stop
 fi
-exit 0
+if [ -s "$CFG" ]; then
+  umask 077
+  TMP=$(mktemp "$BASE/.config-backup.XXXXXX")
+  trap 'rm -f "$TMP"' EXIT
+  cat "$CFG" > "$TMP"
+  mv "$TMP" "$CFG.bak-upgrade"
+fi

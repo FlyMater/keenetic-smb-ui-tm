@@ -14,17 +14,25 @@ import (
 	"time"
 
 	"github.com/tommilevs/keenetic-smb-ui/internal/config"
+	"github.com/tommilevs/keenetic-smb-ui/internal/timemachine"
 	"github.com/tommilevs/keenetic-smb-ui/internal/web"
 )
 
 var version = web.Version
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "--timemachine-probe" {
+		if err := timemachine.ProbeFile(os.Args[2] == "write"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	var (
-		cfgPath  = flag.String("config", "/opt/etc/keenetic-smb-ui/config.json", "path to config file")
-		listen   = flag.String("listen", "", "override web listen address, e.g. 0.0.0.0:8099")
-		dataDir  = flag.String("data", "/opt/var/keenetic-smb-ui", "state directory")
-		showVer  = flag.Bool("version", false, "print version and exit")
+		cfgPath = flag.String("config", "/opt/etc/keenetic-smb-ui/config.json", "path to config file")
+		listen  = flag.String("listen", "", "override web listen address, e.g. 0.0.0.0:8099")
+		dataDir = flag.String("data", "/opt/var/keenetic-smb-ui", "state directory")
+		showVer = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
 
@@ -49,9 +57,9 @@ func main() {
 	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Run() }()
 	log.Printf("keenetic-smb-ui %s listening on http://%s", version, cfg.Web.Listen)
 	srv.Bootstrap()
+	go func() { errCh <- srv.Run() }()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

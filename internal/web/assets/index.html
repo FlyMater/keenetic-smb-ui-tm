@@ -32,6 +32,7 @@
       <button class="nav active" data-view="overview">Обзор</button>
       <button class="nav" data-view="smb">SMB-сервер</button>
       <button class="nav" data-view="shares">Общие диски</button>
+      <button class="nav" data-view="timemachine">Time Machine</button>
       <button class="nav" data-view="users">Пользователи</button>
       <button class="nav" data-view="acl">Доступ к папкам</button>
       <button class="nav" data-view="stats">Статистика</button>
@@ -122,6 +123,53 @@
       </article>
     </section>
 
+    <section class="view" id="view-timemachine">
+      <article class="card wide">
+        <form id="tm-form" autocomplete="off">
+          <div class="row">
+            <label class="check"><input type="checkbox" id="tm-enabled"> Включить Time Machine</label>
+            <label class="check"><input type="checkbox" id="tm-bonjour" checked> Объявлять через Bonjour</label>
+            <label class="check"><input type="checkbox" id="tm-write" checked> Разрешить запись</label>
+          </div>
+          <p class="hint">При включении Time Machine USB-тома скрываются из общих ресурсов этой панели.</p>
+          <div class="grid2">
+            <label>USB-том<select id="tm-volume"></select></label>
+            <label>Каталог на томе<input id="tm-folder" placeholder="Корень тома"></label>
+          </div>
+          <div class="row">
+            <button class="btn" type="button" id="tm-browse">Выбрать каталог</button>
+            <label class="check"><input type="checkbox" id="tm-create"> Создать каталог при применении</label>
+          </div>
+          <div class="row hidden" id="tm-directory-picker">
+            <span id="tm-current-directory" class="hint"></span>
+            <button class="btn" type="button" id="tm-up">Наверх</button>
+            <select id="tm-directories" aria-label="Подкаталоги"></select>
+            <button class="btn" type="button" id="tm-enter">Открыть</button>
+            <button class="btn" type="button" id="tm-select-directory">Выбрать текущий</button>
+          </div>
+          <div class="tablewrap">
+            <table class="tbl">
+              <thead><tr><th>Точка монтирования</th><th>Файловая система</th><th>UUID</th><th>Объём</th><th>Свободно</th><th>Состояние</th></tr></thead>
+              <tbody id="tm-volumes"></tbody>
+            </table>
+          </div>
+          <div class="grid2 mtop">
+            <label>Имя ресурса<input id="tm-share" maxlength="63" value="TimeMachine"></label>
+            <label>Пользователь Time Machine<input id="tm-user" maxlength="31" value="timemachine" autocomplete="off"></label>
+            <label>Пароль Time Machine<input id="tm-password" type="password" maxlength="127" autocomplete="new-password"></label>
+            <label>Лимит копий, ГиБ<input id="tm-limit" type="number" min="0" max="9007199254740991" step="1" value="0"></label>
+          </div>
+          <p class="hint">Пустой пароль сохраняет действующий. Ноль снимает лимит. Samba оценивает объём sparsebundle, поэтому лимит не является квотой файловой системы.</p>
+          <div class="row">
+            <button class="btn" type="button" id="tm-check">Проверить подключение</button>
+            <button class="btn primary" type="submit" id="tm-apply">Применить</button>
+            <button class="btn" type="button" id="tm-diagnostics">Диагностика</button>
+          </div>
+          <p class="hint" id="tm-message" aria-live="polite"></p>
+          <pre class="code hidden" id="tm-details" aria-live="polite"></pre>
+        </form>
+      </article>
+    </section>
     <section class="view" id="view-users">
       <article class="card wide">
         <h3>Пользователи SMB</h3>
@@ -252,5 +300,6 @@
   </main>
 </div>
 <script src="app.js"></script>
+<script src="timemachine.js"></script>
 </body>
 </html>

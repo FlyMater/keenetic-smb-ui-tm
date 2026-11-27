@@ -68,6 +68,19 @@ type Stats struct {
 	HistoryLen  int `json:"history_len"`
 }
 
+// TimeMachine identifies one local backup destination. Its credential is
+// provisioned directly into Samba's password database.
+type TimeMachine struct {
+	Enabled  bool   `json:"enabled"`
+	UUID     string `json:"uuid"`
+	Folder   string `json:"folder"`
+	Share    string `json:"share"`
+	User     string `json:"user"`
+	ReadOnly bool   `json:"readonly"`
+	LimitGiB uint64 `json:"limit_gib"`
+	Bonjour  bool   `json:"bonjour"`
+}
+
 // Paths describes runtime locations (not user editable via UI).
 type Paths struct {
 	ConfigFile  string `json:"-"`
@@ -82,12 +95,13 @@ type Folder = acl.Folder
 
 // Config is the root document persisted to disk.
 type Config struct {
-	Web     Web      `json:"web"`
-	SMB     SMB      `json:"smb"`
-	Remotes []Remote `json:"remotes"`
-	Folders []Folder `json:"folders"`
-	Stats   Stats    `json:"stats"`
-	Paths   Paths    `json:"paths"`
+	Web         Web          `json:"web"`
+	SMB         SMB          `json:"smb"`
+	Remotes     []Remote     `json:"remotes"`
+	Folders     []Folder     `json:"folders"`
+	Stats       Stats        `json:"stats"`
+	Paths       Paths        `json:"paths"`
+	TimeMachine *TimeMachine `json:"time_machine,omitempty"`
 }
 
 // mu serialises Save/Update across goroutines without living inside Config
@@ -233,7 +247,7 @@ func (c *Config) saveLocked() error {
 func (c *Config) Update(fn func(*Config) error) error {
 	mu.Lock()
 	defer mu.Unlock()
-	snapshot := *c
+	snapshot := c.clone()
 	if err := fn(&snapshot); err != nil {
 		return err
 	}
@@ -243,4 +257,30 @@ func (c *Config) Update(fn func(*Config) error) error {
 	}
 	*c = snapshot
 	return nil
+}
+
+func (c *Config) Snapshot() Config {
+	mu.Lock()
+	defer mu.Unlock()
+	return c.clone()
+}
+
+// Replace restores a configuration after the corresponding file was recovered.
+func (c *Config) Replace(restored Config) {
+	mu.Lock()
+	defer mu.Unlock()
+	*c = restored.clone()
+}
+
+func (c *Config) clone() Config {
+	copy := *c
+	copy.SMB.Users = append([]User(nil), c.SMB.Users...)
+	copy.SMB.ExtraOptions = append([]string(nil), c.SMB.ExtraOptions...)
+	copy.Remotes = append([]Remote(nil), c.Remotes...)
+	copy.Folders = append([]Folder(nil), c.Folders...)
+	if c.TimeMachine != nil {
+		profile := *c.TimeMachine
+		copy.TimeMachine = &profile
+	}
+	return copy
 }

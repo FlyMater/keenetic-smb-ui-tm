@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -12,12 +13,14 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tommilevs/keenetic-smb-ui/internal/config"
 	"github.com/tommilevs/keenetic-smb-ui/internal/samba"
 	"github.com/tommilevs/keenetic-smb-ui/internal/shares"
 	"github.com/tommilevs/keenetic-smb-ui/internal/stats"
+	"github.com/tommilevs/keenetic-smb-ui/internal/timemachine"
 )
 
 //go:embed assets
@@ -25,14 +28,16 @@ var assets embed.FS
 
 // Server bundles HTTP handlers with the domain managers.
 type Server struct {
-	cfg      *config.Config
-	smb      *samba.Manager
-	shares   *shares.Manager
-	stats    *stats.Collector
-	sessions *sessions
-	http     *http.Server
-	ctx      context.Context
-	cancel   context.CancelFunc
+	operations sync.RWMutex
+	tm         timeMachineRuntime
+	cfg        *config.Config
+	smb        *samba.Manager
+	shares     *shares.Manager
+	stats      *stats.Collector
+	sessions   *sessions
+	http       *http.Server
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // New wires the server.
@@ -75,6 +80,8 @@ func New(cfg *config.Config) (*Server, error) {
 	mux.HandleFunc("/api/ndms/users", s.auth(s.handleNDMSUsers))
 	mux.HandleFunc("/api/logs", s.auth(s.handleLogs))
 	mux.HandleFunc("/api/update", s.auth(s.handleUpdate))
+	mux.HandleFunc("/api/time-machine", s.auth(s.handleTimeMachine))
+	mux.HandleFunc("/api/time-machine/", s.auth(s.handleTimeMachine))
 
 	sub, err := fs.Sub(assets, "assets")
 	if err != nil {
@@ -92,7 +99,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 // Run starts the HTTP server.
 func (s *Server) Run() error {
-	ln, err := net.Listen("tcp", s.cfg.Web.Listen)
+	ln, err := net.Listen("tcp", s.http.Addr)
 	if err != nil {
 		return err
 	}
@@ -111,36 +118,65 @@ func (s *Server) Shutdown(d time.Duration) error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	return s.http.Shutdown(ctx)
+	err := s.http.Shutdown(ctx)
+	s.operations.Lock()
+	defer s.operations.Unlock()
+	s.clearBonjour()
+	if stopErr := s.smb.Stop(); stopErr != nil {
+		return errors.Join(err, stopErr)
+	}
+	if s.tm.target != nil {
+		_ = s.tm.target.Close()
+		s.tm.target = nil
+	}
+	return errors.Join(err, timemachine.Detach(tmPath(s.cfg)))
 }
 
 // Bootstrap brings the managed stack up after start: IP alias, smb.conf,
 // users, smbd and the aggregated mounts. Failures are logged, never fatal —
 // the UI must stay reachable so the operator can fix things.
 func (s *Server) Bootstrap() {
+	s.operations.Lock()
 	go func() {
-		if !s.cfg.SMB.Enabled {
-			return
+		err := s.recoverTimeMachine()
+		if err != nil {
+			s.tm.recoveryError = err.Error()
 		}
-		if changed, err := s.smb.EnsureBindIP(); err != nil {
-			log.Printf("bootstrap: bind ip: %v", err)
-		} else if changed {
-			log.Printf("bootstrap: assigned %s", s.cfg.SMB.ListenIP)
+		if err == nil && s.cfg.SMB.Enabled {
+			if _, bindErr := s.smb.EnsureBindIP(); bindErr != nil {
+				log.Printf("bootstrap: bind ip: %v", bindErr)
+			}
+			ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+			err = s.reconfigureSamba(ctx, true)
+			cancel()
 		}
-		if err := s.smb.WriteConfig(); err != nil {
-			log.Printf("bootstrap: write config: %v", err)
-		}
-		if err := s.smb.SyncUsers(); err != nil {
-			log.Printf("bootstrap: users: %v", err)
-		}
-		if err := s.smb.Start(); err != nil {
-			log.Printf("bootstrap: smbd: %v", err)
+		watchShares := s.cfg.SMB.Enabled && s.tm.recoveryError == ""
+		s.operations.Unlock()
+		if err != nil {
+			log.Printf("bootstrap: %v", err)
 		}
 		// Mounts are reconciled in the background: a Proxmox host that is off
 		// during boot must not delay Samba or the UI. Watch keeps retrying and
 		// mounts each disk as soon as it answers.
-		go s.shares.Watch(s.ctx, 30*time.Second)
-		log.Printf("bootstrap: done, smb=%s", s.smb.Status())
+		if watchShares {
+			go s.shares.Watch(s.ctx, 30*time.Second)
+		}
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+				s.operations.Lock()
+				ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
+				if err := s.reconcileTimeMachine(ctx, false, false); err != nil {
+					log.Printf("Time Machine recovery: %v", err)
+				}
+				cancel()
+				s.operations.Unlock()
+			}
+		}
 	}()
 }
 
@@ -151,8 +187,19 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodGet {
+			s.operations.RLock()
+			defer s.operations.RUnlock()
+		} else {
+			s.operations.Lock()
+			defer s.operations.Unlock()
+		}
 		if s.cfg.Web.ReadOnly && r.Method != http.MethodGet {
 			http.Error(w, "read-only mode", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && s.tm.recoveryError != "" {
+			tmError(w, errors.New(s.tm.recoveryError), http.StatusServiceUnavailable)
 			return
 		}
 		next(w, r)
@@ -175,7 +222,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		safe := *s.cfg
+		safe := s.cfg.Snapshot()
 		for i := range safe.SMB.Users {
 			safe.SMB.Users[i].Password = ""
 		}
@@ -198,6 +245,40 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			if incoming.Paths.SambaPidDir == "" {
 				incoming.Paths.SambaPidDir = c.Paths.SambaPidDir
 			}
+			incoming.TimeMachine = c.TimeMachine
+			if tmEnabled(c) {
+				if incoming.Paths != c.Paths || incoming.SMB.ListenIP != c.SMB.ListenIP ||
+					incoming.SMB.BindDevice != c.SMB.BindDevice || incoming.SMB.Ports != c.SMB.Ports {
+					return errors.New("disable Time Machine before changing the Samba listen address or runtime paths")
+				}
+				if err := samba.ValidateTimeMachine(&incoming, tmPath(&incoming)); err != nil {
+					return err
+				}
+				if err := validateTimeMachineAggregate(&incoming); err != nil {
+					return err
+				}
+			}
+			for i := range incoming.SMB.Users {
+				for _, old := range c.SMB.Users {
+					if incoming.SMB.Users[i].Name == old.Name && incoming.SMB.Users[i].Password == "" {
+						incoming.SMB.Users[i].Password = old.Password
+					}
+				}
+			}
+			for i := range incoming.Remotes {
+				for _, old := range c.Remotes {
+					if incoming.Remotes[i].ID == old.ID && incoming.Remotes[i].Password == "" {
+						incoming.Remotes[i].Password = old.Password
+					}
+				}
+			}
+			if c.TimeMachine != nil {
+				for _, user := range incoming.SMB.Users {
+					if strings.EqualFold(user.Name, c.TimeMachine.User) {
+						return errors.New("account is reserved for Time Machine")
+					}
+				}
+			}
 			*c = incoming
 			return nil
 		})
@@ -213,41 +294,46 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRawConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if _, err := w.Write([]byte(s.smb.Config())); err != nil {
+	target := ""
+	if s.tm.target != nil {
+		target = tmPath(s.cfg)
+	}
+	if _, err := w.Write([]byte(samba.RenderWithTimeMachine(s.cfg, target))); err != nil {
 		log.Printf("raw config write: %v", err)
 	}
 }
 
 func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	action := r.URL.Query().Get("action")
 	var err error
 	msgs := map[string]string{}
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
 	switch action {
-	case "start":
+	case "start", "restart":
+		s.tm.paused = false
 		if changed, e := s.smb.EnsureBindIP(); e != nil {
 			err = e
 		} else if changed {
 			msgs["ip"] = "assigned " + s.cfg.SMB.ListenIP
 		}
 		if err == nil {
-			err = s.smb.WriteConfig()
-		}
-		if err == nil {
-			err = s.smb.SyncUsers()
-		}
-		if err == nil {
-			err = s.smb.Start()
+			err = s.reconfigureSamba(ctx, true)
 		}
 	case "stop":
+		s.tm.paused = true
+		s.clearBonjour()
 		err = s.smb.Stop()
-	case "restart":
-		err = s.smb.WriteConfig()
 		if err == nil {
-			err = s.smb.SyncUsers()
-		}
-		if err == nil {
-			_, _ = s.smb.EnsureBindIP()
-			err = s.smb.Restart()
+			if s.tm.target != nil {
+				_ = s.tm.target.Close()
+				s.tm.target = nil
+			}
+			err = timemachine.Detach(tmPath(s.cfg))
 		}
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
@@ -297,11 +383,14 @@ func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
-	errs := s.shares.Apply()
-	if err := s.smb.WriteConfig(); err != nil {
-		errs = append(errs, err)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	if err := s.smb.Restart(); err != nil {
+	errs := s.shares.Apply()
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+	if err := s.reconfigureSamba(ctx, false); err != nil {
 		errs = append(errs, err)
 	}
 	paths := []string{s.shares.Root()}
@@ -336,21 +425,28 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			old[u.Name] = u.Password
 		}
 		for i := range users {
+			if c.TimeMachine != nil && strings.EqualFold(users[i].Name, c.TimeMachine.User) {
+				return errors.New("account is reserved for Time Machine")
+			}
 			if users[i].Password == "" {
 				users[i].Password = old[users[i].Name]
 			}
 		}
 		c.SMB.Users = users
+		if tmEnabled(c) {
+			return samba.ValidateTimeMachine(c, tmPath(c))
+		}
 		return nil
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := s.smb.SyncUsers(); err != nil {
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+	if err := s.reconfigureSamba(ctx, true); err != nil {
 		writeJSON(w, map[string]any{"status": "saved", "warning": err.Error()})
 		return
 	}
-	_ = s.smb.Restart()
 	writeJSON(w, map[string]string{"status": "saved"})
 }
 

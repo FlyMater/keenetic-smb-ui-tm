@@ -67,8 +67,9 @@ func (s *sessions) gcLocked() {
 
 // checkCredentials compares a login/password pair with the configured ones.
 func (s *Server) checkCredentials(user, pass string) bool {
-	return subtle.ConstantTimeCompare([]byte(user), []byte(s.cfg.Web.User)) == 1 &&
-		subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.Web.Password)) == 1
+	saved := s.cfg.Snapshot().Web
+	return subtle.ConstantTimeCompare([]byte(user), []byte(saved.User)) == 1 &&
+		subtle.ConstantTimeCompare([]byte(pass), []byte(saved.Password)) == 1
 }
 
 // authenticated reports whether the request carries a valid session cookie or

@@ -1,5 +1,26 @@
 {
   "_label": "Русский",
   "_code": "ru",
-  "_hint": "Русский — исходный язык интерфейса: пустой словарь означает 'оставить как есть'. Добавьте рядом свой файл, например de.json с ключом _label, и он появится в переключателе."
+  "_hint": "Русский — исходный язык интерфейса. Добавьте рядом свой файл, например de.json с ключом _label, и он появится в переключателе.",
+  "USB volume has no readable UUID": "UUID тома не удалось прочитать",
+  "USB volume is mounted read-only": "Том смонтирован только для чтения",
+  "USB volume UUID is ambiguous": "UUID совпадает у нескольких томов",
+  "USB volume capacity is unavailable": "Не удалось получить объём тома",
+  "USB volume unavailable": "USB-том недоступен",
+  "USB volume has no free space": "На USB-томе нет свободного места",
+  "backup limit exceeds USB volume capacity": "Лимит копий превышает объём USB-тома",
+  "Time Machine SMB account is unavailable": "Учётная запись Time Machine недоступна в Samba",
+  "Unix account name is already in use": "Имя Unix-пользователя уже занято",
+  "enter a password for the new Time Machine account": "Введите пароль для новой учётной записи Time Machine",
+  "enter a password to restore the Time Machine SMB account": "Введите пароль для восстановления учётной записи Time Machine",
+  "a new Time Machine account requires an unused Unix name and a password": "Для новой учётной записи укажите свободное имя и пароль",
+  "invalid dedicated Time Machine account name": "Недопустимое имя пользователя Time Machine",
+  "invalid Time Machine share name": "Недопустимое имя ресурса Time Machine",
+  "invalid Time Machine password": "Недопустимый пароль Time Machine",
+  "Time Machine share name is already in use": "Имя ресурса Time Machine уже используется",
+  "enable Time Machine to check the destination": "Включите Time Machine для проверки выбранного тома",
+  "enable managed Samba before configuring Time Machine": "Включите управляемую Samba перед настройкой Time Machine",
+  "configured Samba IP is not assigned as a dedicated /32 address on the LAN interface": "На LAN-интерфейсе отсутствует отдельный IP Samba с маской /32",
+  "Avahi name collision": "Имя Bonjour уже используется",
+  "Avahi registration failed": "Не удалось зарегистрировать Bonjour"
 }
