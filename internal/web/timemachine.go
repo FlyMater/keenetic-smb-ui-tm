@@ -24,6 +24,7 @@ type timeMachineRuntime struct {
 	bonjourError  string
 	advertised    bool
 	paused        bool
+	applyError    string
 	recoveryError string
 }
 
@@ -135,6 +136,10 @@ func (s *Server) handleTimeMachine(w http.ResponseWriter, r *http.Request) {
 			applyCtx, stop := context.WithTimeout(s.ctx, 45*time.Second)
 			defer stop()
 			err = s.applyTimeMachine(applyCtx, request)
+			s.tm.applyError = ""
+			if err != nil {
+				s.tm.applyError = err.Error()
+			}
 			result = "applied"
 		}
 		if err != nil {
@@ -153,8 +158,11 @@ func tmError(w http.ResponseWriter, err error, status int) {
 
 func (s *Server) tmDiagnostics() map[string]any {
 	out := map[string]any{"smb": s.smb.Status(), "disk": "disabled", "bonjour": "disabled"}
+	if s.tm.applyError != "" {
+		out["apply_error"] = s.tm.applyError
+	}
 	if s.tm.recoveryError != "" {
-		out["disk_error"] = s.tm.recoveryError
+		out["recovery_error"] = s.tm.recoveryError
 	}
 	if !tmEnabled(s.cfg) {
 		return out

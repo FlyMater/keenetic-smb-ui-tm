@@ -361,7 +361,19 @@ function collectUsers() {
 }
 
 async function fillForms() {
-  if (!state.cfg) state.cfg = await api('/api/config');
+  const view = state.view;
+  const message = view === 'smb' ? $('smb-msg') : view === 'settings' ? $('cfg-msg') : null;
+  if (message && !state.cfg) message.textContent = t('Загрузка настроек…');
+  try {
+    if (!state.cfg) state.cfg = await api('/api/config');
+  } catch (error) {
+    if (message && view === state.view) {
+      message.textContent = t('Не удалось загрузить настройки') + ' — ' + error.message;
+    }
+    return;
+  }
+  if (view !== state.view) return;
+  if (message) message.textContent = '';
   const c = state.cfg;
   if (state.view === 'smb') {
     $('smb-ip').value = c.smb.listen_ip;
@@ -404,22 +416,8 @@ async function fillForms() {
   }
 }
 
-async function saveConfig() {
-  const cfg = state.cfg || (await api('/api/config'));
-  cfg.smb.listen_ip = $('smb-ip').value.trim();
-  cfg.smb.bind_device = $('smb-dev').value.trim();
-  cfg.smb.workgroup = $('smb-wg').value.trim();
-  cfg.smb.server_string = $('smb-name').value.trim();
-  cfg.smb.share_name = $('smb-share').value.trim();
-  cfg.smb.share_path = $('smb-path').value.trim();
-  cfg.smb.ports = $('smb-ports').value.trim();
-  cfg.smb.share_readonly = $('smb-sharero').checked;
-  cfg.smb.force_user = $('smb-forceuser').checked;
-  cfg.smb.extra_options = $('smb-extra').value.split('\n').map((s) => s.trim()).filter(Boolean);
-  cfg.smb.min_protocol = $('smb-min').value;
-  cfg.smb.max_protocol = $('smb-max').value;
-  cfg.smb.enabled = $('smb-enabled').checked;
-  cfg.smb.guest_ok = $('smb-guest').checked;
+async function saveSettings() {
+  const cfg = await api('/api/config');
   cfg.web.listen = $('web-listen').value.trim();
   cfg.web.user = $('web-user').value.trim();
   const p = $('web-pass').value;
@@ -428,7 +426,8 @@ async function saveConfig() {
   cfg.stats.interval_sec = Number($('st-interval').value) || 5;
   cfg.stats.history_len = Number($('st-len').value) || 120;
   await api('/api/config', { method: 'POST', body: JSON.stringify(cfg) });
-  state.cfg = cfg;
+  $('web-pass').value = '';
+  state.cfg = null;
   $('cfg-msg').textContent = 'Сохранено.';
 }
 
@@ -524,7 +523,8 @@ async function startApp() {
     state.cfg = null; fillForms(); refresh();
   };
   $('cfg-save').onclick = async () => {
-    try { await saveConfig(); await api('/api/remotes/apply', { method: 'POST' }); refresh(); }
+    if (!state.cfg) return;
+    try { await saveSettings(); await fillForms(); }
     catch (e) { $('cfg-msg').textContent = 'Ошибка: ' + e.message; }
   };
   const requestUpdate = async (install) => {
@@ -556,8 +556,13 @@ async function startApp() {
   $('upd-install').onclick = () => requestUpdate(true);
   for (const [id, action] of [['smb-start', 'start'], ['smb-stop', 'stop'], ['smb-restart', 'restart']]) {
     $(id).onclick = async () => {
-      const r = await api(`/api/service?action=${action}`, { method: 'POST' });
-      console.log(r); refresh();
+      try {
+        const result = await api(`/api/service?action=${action}`, { method: 'POST' });
+        $('smb-msg').textContent = result.error || '';
+      } catch (error) {
+        $('smb-msg').textContent = error.message;
+      }
+      refresh();
     };
   }
   $('smb-preview').onclick = async () => {

@@ -102,22 +102,13 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 	if err != nil {
 		return err
 	}
-	if tx.Pending() {
-		return errors.New("an unfinished Time Machine transaction requires application restart")
+	if err := tx.Prepare(); err != nil {
+		return err
 	}
 	previousTarget := s.tm.target
 	wasRunning := s.smb.Running()
-	if err := s.smb.StopInstalled(&old); err != nil {
-		return err
-	}
-	s.clearBonjour()
-	if err := tx.Capture(); err != nil {
-		if wasRunning {
-			err = errors.Join(err, s.smb.StartInstalled(ctx, &old))
-		}
-		return err
-	}
 	var target *timemachine.Target
+	var stopAttempted, bindingChanged, startAttempted bool
 	defer func() {
 		if result == nil {
 			if target != nil {
@@ -133,24 +124,29 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 		if target != nil {
 			defer target.Close()
 		}
-		if err := s.smb.StopInstalled(&next); err != nil {
-			result = errors.Join(result, fmt.Errorf("rollback stop: %w", err))
-			s.tm.recoveryError = result.Error()
-			return
+		if startAttempted {
+			if err := s.smb.StopInstalled(&next); err != nil {
+				result = errors.Join(result, fmt.Errorf("rollback stop: %w", err))
+				s.tm.recoveryError = result.Error()
+				return
+			}
 		}
-		bindErr := s.switchTarget(&old, previousTarget)
-		restoreErr := tx.Restore()
-		s.cfg.Replace(old)
-		s.tm.target = previousTarget
-		var startErr error
-		if wasRunning && bindErr == nil && restoreErr == nil {
-			startErr = s.smb.StartInstalled(rollback, &old)
+		var bindErr, restoreErr, startErr error
+		if bindingChanged {
+			bindErr = s.switchTarget(&old, previousTarget)
+			restoreErr = tx.Restore()
+			s.cfg.Replace(old)
 		}
 		var folderErr error
 		if target != nil {
 			folderErr = target.RemoveCreatedFolder()
 		}
-		userErr := rollbackAccount(rollback, tx)
+		if stopAttempted && wasRunning && restoreErr == nil && (bindErr == nil || previousTarget == nil) {
+			startErr = s.smb.StartInstalled(rollback, &old)
+		}
+		accountCtx, cancelAccount := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelAccount()
+		userErr := rollbackAccount(accountCtx, tx)
 		var completeErr error
 		if bindErr == nil && restoreErr == nil && startErr == nil && userErr == nil {
 			completeErr = tx.Complete()
@@ -159,7 +155,9 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 		if bindErr != nil || restoreErr != nil || startErr != nil || userErr != nil || completeErr != nil {
 			s.tm.recoveryError = result.Error()
 		}
-		s.updateBonjour(rollback)
+		if stopAttempted {
+			s.updateBonjour(rollback)
+		}
 	}()
 	if p.Enabled {
 		if newAccount {
@@ -186,6 +184,15 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 			return err
 		}
 	}
+	stopAttempted = true
+	if err := s.smb.StopInstalled(&old); err != nil {
+		return err
+	}
+	s.clearBonjour()
+	if err := tx.Capture(); err != nil {
+		return err
+	}
+	bindingChanged = true
 	if err := s.switchTarget(&next, target); err != nil {
 		return err
 	}
@@ -208,6 +215,7 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 				return err
 			}
 		}
+		startAttempted = true
 		if err := s.smb.StartInstalled(ctx, &next); err != nil {
 			return err
 		}

@@ -93,10 +93,13 @@ func TestTransactionRestoresConfigAndAccountDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.Capture(); err != nil {
+	if err := tx.Prepare(); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.RecordNewAccount("tm_mac"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Capture(); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{configPath, sambaPath, passdb} {
@@ -139,6 +142,9 @@ func TestTransactionKeepsJournalAfterRestoreWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := tx.Prepare(); err != nil {
+		t.Fatal(err)
+	}
 	if err := tx.Capture(); err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +166,45 @@ func TestTransactionKeepsJournalAfterRestoreWriteFailure(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != "prior config" {
 		t.Fatalf("retry did not restore prior config: %q, %v", got, err)
+	}
+}
+
+func TestTransactionRecoveryBeforeSambaStops(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	passdb := filepath.Join(dir, "passdb")
+	journal := filepath.Join(dir, "journal")
+	tx, err := NewTransaction(journal, configPath, passdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.RecordNewAccount("tm_mac"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(passdb, []byte("live Samba database"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// With no file snapshot yet, recovery can find the new Unix account
+	// without rolling back a write made by the live smbd.
+	recovered, err := NewTransaction(journal, configPath, passdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.Prepare(); err == nil {
+		t.Fatal("a second apply replaced the preparation marker")
+	}
+	if err := recovered.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if name, err := recovered.NewAccount(); err != nil || name != "tm_mac" {
+		t.Fatalf("missing recovery account: %q, %v", name, err)
+	}
+	got, err := os.ReadFile(passdb)
+	if err != nil || string(got) != "live Samba database" {
+		t.Fatalf("preparation recovery touched passdb: %q, %v", got, err)
 	}
 }
 
