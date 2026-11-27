@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
 	"github.com/tommilevs/keenetic-smb-ui/internal/config"
+	"github.com/tommilevs/keenetic-smb-ui/internal/samba"
 )
 
 // handleFolders lists folder ACLs (GET) or replaces them (POST). The UI also
@@ -52,16 +54,20 @@ func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.cfg.Update(func(c *config.Config) error {
 			c.Folders = payload.Folders
+			if tmEnabled(c) {
+				return samba.ValidateTimeMachine(c, tmPath(c))
+			}
 			return nil
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := s.smb.WriteConfig(); err != nil {
+		ctx, cancel := contextWithTimeout(30 * time.Second)
+		defer cancel()
+		if err := s.reconfigureSamba(ctx, false); err != nil {
 			writeJSON(w, map[string]any{"status": "saved", "warning": err.Error()})
 			return
 		}
-		_ = s.smb.Restart()
 		writeJSON(w, map[string]string{"status": "saved"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

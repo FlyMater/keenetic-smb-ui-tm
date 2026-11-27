@@ -13,6 +13,7 @@ const TOOLBAR = {
 const VIEW_TITLES = {
   overview: 'Обзор', smb: 'SMB-сервер', shares: 'Общие диски', users: 'Пользователи',
   acl: 'Доступ к папкам', stats: 'Статистика', logs: 'Логи', settings: 'Настройки',
+  timemachine: 'Time Machine',
 };
 
 async function api(path, opts = {}) {
@@ -25,8 +26,11 @@ async function api(path, opts = {}) {
     showLogin('Сессия истекла, войдите заново');
     throw new Error('unauthorized');
   }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const ct = res.headers.get('content-type') || '';
+  if (!res.ok) {
+    const detail = ct.includes('json') ? (await res.json().catch(() => ({}))).error : '';
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
   return ct.includes('json') ? res.json() : res.text();
 }
 
@@ -63,6 +67,7 @@ function show(view) {
   updateToolbar(view);
   if (view === 'logs') loadLogs();
   if (view === 'acl') loadAcl();
+  if (view === 'timemachine') loadTimeMachine();
   if (view === 'settings' || view === 'smb' || view === 'shares' || view === 'users') fillForms();
   if (view !== 'logs' && view !== 'acl') refresh();
   refreshI18nSoon();

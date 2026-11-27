@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
+	"github.com/tommilevs/keenetic-smb-ui/internal/samba"
 )
 
 // fsEntry is one row of the «Файлы и папки» list: a directory (or a file) of
@@ -146,6 +147,20 @@ func (s *Server) shareAbs(rel string) (string, error) {
 	if abs != root && !strings.HasPrefix(abs, root+string(os.PathSeparator)) {
 		return "", os.ErrPermission
 	}
+	if tmEnabled(s.cfg) && abs != root {
+		if samba.IsLocalPath(rel) {
+			return "", os.ErrPermission
+		}
+		for path := abs; path != root; path = filepath.Dir(path) {
+			info, err := os.Lstat(path)
+			if err != nil {
+				return "", err
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", os.ErrPermission
+			}
+		}
+	}
 	return abs, nil
 }
 
@@ -255,6 +270,9 @@ func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, d := range dirents {
 		name := d.Name()
+		if tmEnabled(s.cfg) && (d.Type()&os.ModeSymlink != 0 || samba.IsLocalPath(name)) {
+			continue
+		}
 		full := filepath.Join(abs, name)
 		e := fsEntry{Name: name, Path: joinRel(rel, name), Size: -1}
 		if dirLike(full, d) {

@@ -1,12 +1,70 @@
 #!/bin/sh
-# Entware init script for keenetic-smb-ui
-# Keeps the managed Samba instance separate from the router's native SMB.
-
-ENABLED=yes
-PROCS=keenetic-smb-ui
-ARGS="-config /opt/etc/keenetic-smb-ui/config.json -data /opt/var/keenetic-smb-ui"
-PREARGS=""
-DESC="Keenetic SMB UI service"
+# Entware service for the panel and its private Samba instance.
+NAME=keenetic-smb-ui
+BIN="/opt/bin/$NAME"
+CFG="/opt/etc/$NAME/config.json"
+DATA="/opt/var/$NAME"
+PIDFILE="/opt/var/run/$NAME.pid"
 PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
-. /opt/etc/init.d/rc.func
+ours() {
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  [ "$(cat "/proc/$1/comm" 2>/dev/null)" = "$NAME" ] || return 1
+  [ "$(awk '{print $3}' "/proc/$1/stat" 2>/dev/null)" != Z ] || return 1
+  tr '\000' '\n' < "/proc/$1/cmdline" 2>/dev/null | grep -Fxq "$CFG"
+}
+
+find_pid() {
+  PID=$(cat "$PIDFILE" 2>/dev/null)
+  if ours "$PID"; then return 0; fi
+  for PID in $(pidof "$NAME" 2>/dev/null); do
+    if ours "$PID"; then return 0; fi
+  done
+  return 1
+}
+
+start() {
+  if find_pid; then return 0; fi
+  [ -x "$BIN" ] || return 1
+  mkdir -p "$DATA/log" /opt/var/run || return 1
+  umask 077
+  "$BIN" -config "$CFG" -data "$DATA" >> "$DATA/log/app.log" 2>&1 &
+  PID=$!
+  printf '%s\n' "$PID" > "$PIDFILE" || return 1
+  sleep 1
+  if ours "$PID"; then
+    printf '%s started\n' "$NAME"
+    return 0
+  fi
+  rm -f "$PIDFILE"
+  return 1
+}
+
+stop() {
+  if find_pid; then
+    kill -TERM "$PID" 2>/dev/null || return 1
+    i=0
+    while ours "$PID"; do
+      [ "$i" -lt 30 ] || return 1
+      sleep 1
+      i=$((i + 1))
+    done
+  fi
+  rm -f "$PIDFILE"
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop && start ;;
+  status|check)
+    if find_pid; then
+      printf '%s is running\n' "$NAME"
+    else
+      printf '%s is stopped\n' "$NAME"
+      exit 1
+    fi
+    ;;
+  *) printf 'Usage: %s {start|stop|restart|status}\n' "$0" >&2; exit 1 ;;
+esac
