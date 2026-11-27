@@ -2,9 +2,15 @@
 package update
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -13,35 +19,44 @@ import (
 )
 
 const (
-	repoAPI   = "https://api.github.com/repos/tommilevs/keenetic-smb-ui/releases/latest"
-	archMatch = "aarch64-3.10" // overridden by caller; kept for reference
+	repository = "FlyMater/keenetic-smb-ui-tm"
+	repoAPI    = "https://api.github.com/repos/" + repository + "/releases/latest"
 )
 
 // Info describes the result of an update check.
 type Info struct {
-	Current string `json:"current"`
-	Latest  string `json:"latest"`
-	URL     string `json:"url,omitempty"`
-	Notes   string `json:"notes,omitempty"`
-	Newer   bool   `json:"newer"`
-	Error   string `json:"error,omitempty"`
+	Repository string `json:"repository"`
+	Current    string `json:"current"`
+	Latest     string `json:"latest"`
+	URL        string `json:"url,omitempty"`
+	Notes      string `json:"notes,omitempty"`
+	Newer      bool   `json:"newer"`
+	Error      string `json:"error,omitempty"`
+	size       int64
+	digest     string
 }
 
 type release struct {
 	TagName string `json:"tag_name"`
 	Body    string `json:"body"`
 	Assets  []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
+		Name   string `json:"name"`
+		URL    string `json:"browser_download_url"`
+		Size   int64  `json:"size"`
+		Digest string `json:"digest"`
 	} `json:"assets"`
 }
 
 // Check compares the running version with the latest GitHub release and picks
 // the asset matching the package architecture (e.g. aarch64-3.10).
-func Check(current, archSuffix string) Info {
-	info := Info{Current: current}
+func Check(ctx context.Context, current, archSuffix string) Info {
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, repoAPI, nil)
+	return check(ctx, client, repoAPI, current, archSuffix)
+}
+
+func check(ctx context.Context, client *http.Client, endpoint, current, archSuffix string) Info {
+	info := Info{Repository: repository, Current: current}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		info.Error = err.Error()
 		return info
@@ -54,6 +69,10 @@ func Check(current, archSuffix string) Info {
 		return info
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		info.Error = "В репозитории пока нет опубликованных релизов"
+		return info
+	}
 	if resp.StatusCode != http.StatusOK {
 		info.Error = fmt.Sprintf("github api: %s", resp.Status)
 		return info
@@ -63,13 +82,20 @@ func Check(current, archSuffix string) Info {
 		info.Error = err.Error()
 		return info
 	}
+	if tag := versionRE.FindString(rel.TagName); tag == "" || tag != rel.TagName {
+		info.Error = "Тег релиза должен быть в формате v1.2.3"
+		return info
+	}
 	info.Latest = strings.TrimPrefix(rel.TagName, "v")
 	info.Notes = rel.Body
 	info.Newer = compare(current, info.Latest) < 0
-	for _, a := range rel.Assets {
-		if strings.Contains(a.Name, archSuffix) && strings.HasSuffix(a.Name, ".ipk") {
-			info.URL = a.URL
-			break
+	if info.Newer {
+		name := "keenetic-smb-ui_" + info.Latest + "_" + archSuffix + ".ipk"
+		for _, a := range rel.Assets {
+			if a.Name == name && a.Size > 0 && releaseAssetURL(a.URL, rel.TagName, name) {
+				info.URL, info.size, info.digest = a.URL, a.Size, a.Digest
+				break
+			}
 		}
 	}
 	if info.Newer && info.URL == "" {
@@ -78,7 +104,19 @@ func Check(current, archSuffix string) Info {
 	return info
 }
 
+func releaseAssetURL(raw, tag, asset string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, "github.com") ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	repoPath := "/" + repository + "/"
+	return len(u.Path) >= len(repoPath) && strings.EqualFold(u.Path[:len(repoPath)], repoPath) &&
+		u.Path[len(repoPath):] == "releases/download/"+tag+"/"+asset
+}
+
 var versionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
 func parseVersion(v string) (int, int, int) {
 	m := versionRE.FindStringSubmatch(strings.TrimSpace(v))
 	if m == nil {
@@ -106,22 +144,81 @@ func compare(a, b string) int {
 	return 0
 }
 
-// Install downloads url and installs it with opkg. The install runs detached
-// because it replaces the running binary and restarts the service.
-func Install(url string) error {
-	script := fmt.Sprintf(`
+// Install downloads the selected package before handing it to opkg. The
+// package scripts restart the application, so opkg runs outside the request.
+func Install(ctx context.Context, info Info) error {
+	opkg, err := exec.LookPath("opkg")
+	if err != nil {
+		return err
+	}
+	pkg, err := os.CreateTemp("", "keenetic-smb-ui-update-*.ipk")
+	if err != nil {
+		return err
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			_ = os.Remove(pkg.Name())
+		}
+	}()
+	client := &http.Client{
+		Timeout: 2 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 || req.URL.Scheme != "https" {
+				return errors.New("недопустимое перенаправление при загрузке пакета")
+			}
+			return nil
+		},
+	}
+	err = downloadPackage(ctx, client, info, pkg)
+	if err := errors.Join(err, pkg.Close()); err != nil {
+		return err
+	}
+	cmd := exec.Command("/bin/sh", "-c", `
+trap 'rm -f "$2"' EXIT
 sleep 2
-cd /tmp || exit 1
-curl -fsSL -o /tmp/keenetic-smb-ui.update.ipk %q || exit 1
-opkg install --force-reinstall /tmp/keenetic-smb-ui.update.ipk || exit 1
-/opt/etc/init.d/S99keenetic-smb-ui restart
-rm -f /tmp/keenetic-smb-ui.update.ipk
-`, url)
-	cmd := exec.Command("/bin/sh", "-c", script)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+"$1" install "$2"
+`, "keenetic-smb-ui-update", opkg, pkg.Name())
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	handedOff = true
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+func downloadPackage(ctx context.Context, client *http.Client, info Info, dst io.Writer) error {
+	if !info.Newer || info.URL == "" || info.size <= 0 {
+		return errors.New("пакет обновления не выбран")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.URL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("загрузка пакета: %s", resp.Status)
+	}
+	hash := sha256.New()
+	size, err := io.Copy(io.MultiWriter(dst, hash), io.LimitReader(resp.Body, info.size))
+	if err != nil {
+		return err
+	}
+	extra, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+	if err != nil {
+		return err
+	}
+	if size != info.size || extra != 0 {
+		return errors.New("размер пакета не совпадает с данными релиза")
+	}
+	if info.digest != "" && !strings.EqualFold(info.digest, fmt.Sprintf("sha256:%x", hash.Sum(nil))) {
+		return errors.New("контрольная сумма пакета не совпадает с данными релиза")
+	}
+	return nil
 }

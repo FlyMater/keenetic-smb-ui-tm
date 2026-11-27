@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"net/http"
@@ -11,9 +11,9 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	arch := update.DetectArch()
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, update.Check(Version, arch))
+		writeJSON(w, update.Check(r.Context(), Version, arch))
 	case http.MethodPost:
-		info := update.Check(Version, arch)
+		info := update.Check(r.Context(), Version, arch)
 		if info.Error != "" {
 			writeJSON(w, map[string]any{"status": "error", "error": info.Error, "info": info})
 			return
@@ -22,14 +22,14 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"status": "uptodate", "info": info})
 			return
 		}
-		if err := update.Install(info.URL); err != nil {
+		if err := update.Install(r.Context(), info); err != nil {
 			writeJSON(w, map[string]any{"status": "error", "error": err.Error(), "info": info})
 			return
 		}
 		writeJSON(w, map[string]any{
 			"status": "installing",
 			"info":   info,
-			"hint":   "пакет скачивается и устанавливается, служба перезапустится через несколько секунд",
+			"hint":   "пакет загружен и передан opkg, служба перезапустится после установки",
 		})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

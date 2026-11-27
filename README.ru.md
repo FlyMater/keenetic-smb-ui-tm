@@ -448,4 +448,23 @@ opkg --force-downgrade install ./keenetic-smb-ui_1.7.0_aarch64-3.10.ipk
 /opt/etc/init.d/S99keenetic-smb-ui status
 ```
 
+### Обновления через панель
+
+Начиная с версии `1.8.1`, кнопка «Проверить обновления» обращается к
+[GitHub Releases репозитория FlyMater/keenetic-smb-ui-tm](https://github.com/FlyMater/keenetic-smb-ui-tm/releases).
+На роутере со старой версией установите `1.8.1` вручную по инструкции выше.
+Для следующих обновлений опубликуйте обычный релиз с тегом `vX.Y.Z` и
+приложите пакет `keenetic-smb-ui_X.Y.Z_aarch64-3.10.ipk` для ARM64.
+Слияние PR в `main` само по себе релиз не создаёт.
+
+Пример сборки пакета для следующего релиза из обновлённого `main`.
+
+```sh
+make ipk ARCH=arm64 VERSION=1.8.2
+```
+
+После публикации `v1.8.2` панель предложит этот пакет при проверке и
+передаст его `opkg` по кнопке «Установить». Ошибки установки выводятся в
+`/opt/var/keenetic-smb-ui/log/app.log`.
+
 <sub>Сделано для роутеров Keenetic на Entware. Не связано с Keenetic Ltd.</sub>

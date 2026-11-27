@@ -527,25 +527,33 @@ async function startApp() {
     try { await saveConfig(); await api('/api/remotes/apply', { method: 'POST' }); refresh(); }
     catch (e) { $('cfg-msg').textContent = 'Ошибка: ' + e.message; }
   };
-  $('upd-check').onclick = async () => {
-    const i = await api('/api/update');
-    $('upd-current').textContent = i.current || '—';
-    $('upd-msg').textContent = i.error
-      ? 'Ошибка: ' + i.error
-      : i.newer
-        ? `Доступна ${i.latest} (сейчас ${i.current}) — нажмите «Установить»`
-        : `Обновлений нет (последняя ${i.latest || i.current})`;
+  const requestUpdate = async (install) => {
+    let installing = false;
+    $('upd-check').disabled = $('upd-install').disabled = true;
+    $('upd-msg').textContent = t(install ? 'Загрузка пакета обновления…' : 'Проверяю обновления…');
+    try {
+      const result = await api('/api/update', { method: install ? 'POST' : 'GET' });
+      const info = install ? result.info : result;
+      if (info?.repository) $('upd-source').textContent = info.repository;
+      installing = result.status === 'installing';
+      if (installing) {
+        $('upd-msg').textContent = t('Пакет передан opkg. Страница перезагрузится через 20 секунд…');
+        setTimeout(() => location.reload(), 20000);
+      } else if (result.error || info?.error) {
+        $('upd-msg').textContent = t(result.error || info.error);
+      } else if (info?.newer) {
+        $('upd-msg').textContent = t('Доступна новая версия %s').replace('%s', info.latest);
+      } else {
+        $('upd-msg').textContent = t('Обновлений нет');
+      }
+    } catch (e) {
+      $('upd-msg').textContent = e.message;
+    } finally {
+      if (!installing) $('upd-check').disabled = $('upd-install').disabled = false;
+    }
   };
-  $('upd-install').onclick = async () => {
-    $('upd-msg').textContent = 'Установка…';
-    const r = await api('/api/update', { method: 'POST' });
-    $('upd-msg').textContent = r.status === 'installing'
-      ? 'Устанавливается, страница перезагрузится через 20 секунд…'
-      : r.status === 'uptodate'
-        ? 'Обновлений нет'
-        : 'Ошибка: ' + (r.error || 'неизвестно');
-    if (r.status === 'installing') setTimeout(() => location.reload(), 20000);
-  };
+  $('upd-check').onclick = () => requestUpdate(false);
+  $('upd-install').onclick = () => requestUpdate(true);
   for (const [id, action] of [['smb-start', 'start'], ['smb-stop', 'stop'], ['smb-restart', 'restart']]) {
     $(id).onclick = async () => {
       const r = await api(`/api/service?action=${action}`, { method: 'POST' });

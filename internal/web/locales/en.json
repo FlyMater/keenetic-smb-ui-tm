@@ -206,5 +206,13 @@
   "Подключение SMB проверено": "SMB connection verified",
   "Предварительные проверки пройдены. Для проверки SMB примените настройки и введите пароль.": "Preflight passed. Apply settings and enter a password to verify SMB.",
   "Предварительные проверки пройдены. Права и xattr будут проверены при применении.": "Preflight passed. Permissions and extended attributes will be verified when applying settings.",
-  "Выберите том": "Select a volume"
+  "Выберите том": "Select a volume",
+  "Загрузка пакета обновления…": "Downloading the update package…",
+  "Проверяю обновления…": "Checking for updates…",
+  "Пакет передан opkg. Страница перезагрузится через 20 секунд…": "Package handed to opkg. The page will reload in 20 seconds…",
+  "Доступна новая версия %s": "Version %s is available",
+  "В репозитории пока нет опубликованных релизов": "There are no published releases in this repository",
+  "Тег релиза должен быть в формате v1.2.3": "The release tag must have the format v1.2.3",
+  "размер пакета не совпадает с данными релиза": "The package size does not match the release metadata",
+  "контрольная сумма пакета не совпадает с данными релиза": "The package checksum does not match the release metadata"
 }
