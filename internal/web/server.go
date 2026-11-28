@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -67,6 +68,7 @@ func New(cfg *config.Config) (*Server, error) {
 	mux.HandleFunc("/api/session", s.handleSession)
 	mux.HandleFunc("/api/status", s.auth(s.handleStatus))
 	mux.HandleFunc("/api/config", s.auth(s.handleConfig))
+	mux.HandleFunc("/api/settings", s.auth(s.handleSettings))
 	mux.HandleFunc("/api/config/raw", s.auth(s.handleRawConfig))
 	mux.HandleFunc("/api/service", s.auth(s.handleService))
 	mux.HandleFunc("/api/remotes", s.auth(s.handleRemotes))
@@ -290,6 +292,39 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var incoming struct {
+		Web   *config.Web   `json:"web"`
+		Stats *config.Stats `json:"stats"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&incoming); err != nil || incoming.Web == nil || incoming.Stats == nil {
+		http.Error(w, "expected web and stats settings", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+		http.Error(w, "expected a single settings object", http.StatusBadRequest)
+		return
+	}
+	if err := s.cfg.Update(func(c *config.Config) error {
+		if incoming.Web.Password == "" {
+			incoming.Web.Password = c.Web.Password
+		}
+		c.Web = *incoming.Web
+		c.Stats = *incoming.Stats
+		return nil
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "saved"})
 }
 
 func (s *Server) handleRawConfig(w http.ResponseWriter, r *http.Request) {

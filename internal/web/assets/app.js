@@ -1,7 +1,14 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { cfg: null, status: null, view: 'overview', timer: null, autorefresh: true };
+const state = { cfg: null, settingsReady: false, status: null, view: 'overview', timer: null, autorefresh: true };
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('button:not(:disabled),a.btn');
+  if (!button || button.classList.contains('button-pressed')) return;
+  button.classList.add('button-pressed');
+  setTimeout(() => button.classList.remove('button-pressed'), 120);
+}, { capture: true });
 
 // Which toolbar controls make sense on which page. "Обновить" only where data is
 // live, "Применить" only where settings are written to smb.conf.
@@ -32,6 +39,19 @@ async function api(path, opts = {}) {
     throw new Error(detail || `${res.status} ${res.statusText}`);
   }
   return ct.includes('json') ? res.json() : res.text();
+}
+
+async function runButtonAction(buttons, message, progress, action) {
+  if (buttons.some((button) => button.disabled)) return;
+  buttons.forEach((button) => { button.disabled = true; });
+  message.textContent = t(progress);
+  try {
+    await action();
+  } catch (error) {
+    message.textContent = t('Ошибка: ') + t(error.message);
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
 }
 
 function showLogin(msg) {
@@ -363,6 +383,8 @@ function collectUsers() {
 async function fillForms() {
   const view = state.view;
   const message = view === 'smb' ? $('smb-msg') : view === 'settings' ? $('cfg-msg') : null;
+  const actionPending = () => view === 'smb' ? $('smb-start').disabled : view === 'settings' && $('cfg-save').disabled;
+  if (actionPending()) return;
   if (message && !state.cfg) message.textContent = t('Загрузка настроек…');
   try {
     if (!state.cfg) state.cfg = await api('/api/config');
@@ -372,7 +394,7 @@ async function fillForms() {
     }
     return;
   }
-  if (view !== state.view) return;
+  if (view !== state.view || actionPending()) return;
   if (message) message.textContent = '';
   const c = state.cfg;
   if (state.view === 'smb') {
@@ -413,22 +435,27 @@ async function fillForms() {
     $('web-ro').checked = !!c.web.readonly;
     $('st-interval').value = c.stats.interval_sec;
     $('st-len').value = c.stats.history_len;
+    state.settingsReady = true;
   }
 }
 
 async function saveSettings() {
-  const cfg = await api('/api/config');
-  cfg.web.listen = $('web-listen').value.trim();
-  cfg.web.user = $('web-user').value.trim();
-  const p = $('web-pass').value;
-  if (p) cfg.web.password = p;
-  cfg.web.readonly = $('web-ro').checked;
-  cfg.stats.interval_sec = Number($('st-interval').value) || 5;
-  cfg.stats.history_len = Number($('st-len').value) || 120;
-  await api('/api/config', { method: 'POST', body: JSON.stringify(cfg) });
+  const settings = {
+    web: {
+      listen: $('web-listen').value.trim(),
+      user: $('web-user').value.trim(),
+      password: $('web-pass').value,
+      readonly: $('web-ro').checked,
+    },
+    stats: {
+      interval_sec: Number($('st-interval').value) || 5,
+      history_len: Number($('st-len').value) || 120,
+    },
+  };
+  await api('/api/settings', { method: 'POST', body: JSON.stringify(settings) });
   $('web-pass').value = '';
   state.cfg = null;
-  $('cfg-msg').textContent = 'Сохранено.';
+  $('cfg-msg').textContent = t('Сохранено.');
 }
 
 async function startApp() {
@@ -522,10 +549,10 @@ async function startApp() {
     await api('/api/users', { method: 'POST', body: JSON.stringify(collectUsers()) });
     state.cfg = null; fillForms(); refresh();
   };
-  $('cfg-save').onclick = async () => {
-    if (!state.cfg) return;
-    try { await saveSettings(); await fillForms(); }
-    catch (e) { $('cfg-msg').textContent = 'Ошибка: ' + e.message; }
+  const settingsSave = $('cfg-save');
+  settingsSave.onclick = () => {
+    if (!state.settingsReady) return;
+    return runButtonAction([settingsSave], $('cfg-msg'), 'Сохраняю настройки…', saveSettings);
   };
   const requestUpdate = async (install) => {
     let installing = false;
@@ -554,16 +581,25 @@ async function startApp() {
   };
   $('upd-check').onclick = () => requestUpdate(false);
   $('upd-install').onclick = () => requestUpdate(true);
-  for (const [id, action] of [['smb-start', 'start'], ['smb-stop', 'stop'], ['smb-restart', 'restart']]) {
-    $(id).onclick = async () => {
+  const serviceActions = [
+    ['smb-start', 'start', 'Запускаю Samba…', 'Samba запущена.'],
+    ['smb-stop', 'stop', 'Останавливаю Samba…', 'Samba остановлена.'],
+    ['smb-restart', 'restart', 'Перезапускаю Samba…', 'Samba перезапущена.'],
+  ];
+  const serviceButtons = serviceActions.map(([id]) => $(id));
+  const serviceMessage = $('smb-msg');
+  for (const [id, action, progress, success] of serviceActions) {
+    $(id).onclick = () => runButtonAction(serviceButtons, serviceMessage, progress, async () => {
       try {
         const result = await api(`/api/service?action=${action}`, { method: 'POST' });
-        $('smb-msg').textContent = result.error || '';
-      } catch (error) {
-        $('smb-msg').textContent = error.message;
+        if (result.error) throw new Error(result.error);
+        if (action !== 'stop' && result.service === 'disabled') throw new Error('Сервер SMB отключён в настройках.');
+        if (action !== 'stop' && result.service !== 'running') throw new Error('Samba не запустилась.');
+        serviceMessage.textContent = t(success);
+      } finally {
+        refresh();
       }
-      refresh();
-    };
+    });
   }
   $('smb-preview').onclick = async () => {
     const txt = await api('/api/config/raw');
