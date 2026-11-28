@@ -37,21 +37,22 @@ type Remote struct {
 
 // SMB holds settings of the managed Samba instance.
 type SMB struct {
-	Enabled       bool     `json:"enabled"`
-	ListenIP      string   `json:"listen_ip"`
-	BindDevice    string   `json:"bind_device"`
-	Workgroup     string   `json:"workgroup"`
-	ServerString  string   `json:"server_string"`
-	ShareName     string   `json:"share_name"`
-	SharePath     string   `json:"share_path"`
-	ShareReadOnly bool     `json:"share_readonly"`
-	ForceUser     bool     `json:"force_user"`
-	Ports         string   `json:"ports"`
-	MinProtocol   string   `json:"min_protocol"`
-	MaxProtocol   string   `json:"max_protocol"`
-	Users         []User   `json:"users"`
-	GuestOK       bool     `json:"guest_ok"`
-	ExtraOptions  []string `json:"extra_options,omitempty"`
+	Enabled           bool     `json:"enabled"`
+	ListenIP          string   `json:"listen_ip"`
+	BindDevice        string   `json:"bind_device"`
+	Workgroup         string   `json:"workgroup"`
+	ServerString      string   `json:"server_string"`
+	ShareName         string   `json:"share_name"`
+	SharePath         string   `json:"share_path"`
+	AggregateDisabled bool     `json:"aggregate_disabled,omitempty"`
+	ShareReadOnly     bool     `json:"share_readonly"`
+	ForceUser         bool     `json:"force_user"`
+	Ports             string   `json:"ports"`
+	MinProtocol       string   `json:"min_protocol"`
+	MaxProtocol       string   `json:"max_protocol"`
+	Users             []User   `json:"users"`
+	GuestOK           bool     `json:"guest_ok"`
+	ExtraOptions      []string `json:"extra_options,omitempty"`
 }
 
 // Web holds HTTP UI settings.
@@ -68,14 +69,14 @@ type Stats struct {
 	HistoryLen  int `json:"history_len"`
 }
 
-// TimeMachine identifies one local backup destination. Its credential is
-// provisioned directly into Samba's password database.
+// TimeMachine identifies one local backup destination and its Samba account.
 type TimeMachine struct {
 	Enabled  bool   `json:"enabled"`
 	UUID     string `json:"uuid"`
 	Folder   string `json:"folder"`
 	Share    string `json:"share"`
 	User     string `json:"user"`
+	SMBUser  bool   `json:"smb_user,omitempty"`
 	ReadOnly bool   `json:"readonly"`
 	LimitGiB uint64 `json:"limit_gib"`
 	Bonjour  bool   `json:"bonjour"`

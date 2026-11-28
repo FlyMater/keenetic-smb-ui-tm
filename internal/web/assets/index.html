@@ -127,6 +127,18 @@
     <section class="view" id="view-timemachine">
       <article class="card wide">
         <form id="tm-form" autocomplete="off">
+          <div id="tm-legacy" class="hidden">
+            <button class="btn" type="button" id="tm-import">Перенести существующий ресурс</button>
+            <p class="hint" id="tm-legacy-target"></p>
+            <div id="tm-migration" class="hidden">
+              <div class="grid2">
+                <label>Существующая резервная копия<select id="tm-bundle"></select></label>
+              </div>
+              <label class="check mtop"><input type="checkbox" id="tm-owner"> Сменить владельца каталога и выбранной копии</label>
+              <p class="hint" id="tm-owner-path"></p>
+              <button class="btn ghost" type="button" id="tm-cancel-import">Отменить перенос</button>
+            </div>
+          </div>
           <div class="row">
             <label class="check"><input type="checkbox" id="tm-enabled"> Включить Time Machine</label>
             <label class="check"><input type="checkbox" id="tm-bonjour" checked> Объявлять через Bonjour</label>
@@ -156,11 +168,11 @@
           </div>
           <div class="grid2 mtop">
             <label>Имя ресурса<input id="tm-share" maxlength="63" value="TimeMachine"></label>
-            <label>Пользователь Time Machine<input id="tm-user" maxlength="31" value="timemachine" autocomplete="off"></label>
-            <label>Пароль Time Machine<input id="tm-password" type="password" maxlength="127" autocomplete="new-password"></label>
+            <label>Пользователь Time Machine<select id="tm-user"></select></label>
             <label>Лимит копий, ГиБ<input id="tm-limit" type="number" min="0" max="9007199254740991" step="1" value="0"></label>
           </div>
-          <p class="hint">Пустой пароль сохраняет действующий. Ноль снимает лимит. Samba оценивает объём sparsebundle, поэтому лимит не является квотой файловой системы.</p>
+          <p id="tm-no-users" class="hint hidden"><a href="#users">Добавьте подходящего пользователя SMB</a></p>
+          <p class="hint">Используется пароль выбранного пользователя SMB. Ноль снимает лимит. Samba оценивает объём sparsebundle, поэтому лимит не является квотой файловой системы.</p>
           <div class="row">
             <button class="btn" type="button" id="tm-check">Проверить подключение</button>
             <button class="btn primary" type="submit" id="tm-apply">Применить</button>

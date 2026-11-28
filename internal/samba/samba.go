@@ -90,7 +90,11 @@ func RenderWithTimeMachine(cfg *config.Config, target string) string {
 	fmt.Fprintf(&b, "\n[%s]\n", orDefault(s.ShareName, "all"))
 	fmt.Fprintf(&b, "   path = %s\n", orDefault(s.SharePath, "/opt/var/keenetic-smb-ui/share"))
 	fmt.Fprintf(&b, "   comment = aggregated storage\n")
-	fmt.Fprintf(&b, "   browseable = yes\n")
+	if s.AggregateDisabled {
+		fmt.Fprintf(&b, "   available = no\n   browseable = no\n")
+	} else {
+		fmt.Fprintf(&b, "   browseable = yes\n")
+	}
 	users := enabledUsers(cfg)
 	_, hasRootACL := rootFolder(cfg.Folders)
 	if !hasRootACL || len(users) == 0 || cfg.SMB.GuestOK {

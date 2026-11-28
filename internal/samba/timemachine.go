@@ -40,7 +40,7 @@ func ValidateTimeMachine(cfg *config.Config, target string) error {
 	if p == nil || !p.Enabled {
 		return nil
 	}
-	if !safeUser.MatchString(p.User) || p.User == "root" || p.User == "nobody" {
+	if !safeUser.MatchString(strings.ToLower(p.User)) || strings.EqualFold(p.User, "root") || strings.EqualFold(p.User, "nobody") {
 		return errors.New("invalid dedicated Time Machine account name")
 	}
 	if !safeShare.MatchString(p.Share) || p.Share != strings.TrimSpace(p.Share) ||
@@ -85,8 +85,13 @@ func ValidateTimeMachine(cfg *config.Config, target string) error {
 	if _, err := timemachine.FolderParts(p.Folder); err != nil {
 		return err
 	}
+	if p.SMBUser {
+		if _, err := TimeMachineSMBUser(cfg.SMB.Users, p.User, p.ReadOnly); err != nil {
+			return err
+		}
+	}
 	for _, user := range cfg.SMB.Users {
-		if !safeUser.MatchString(strings.ToLower(user.Name)) || strings.EqualFold(user.Name, p.User) {
+		if !safeUser.MatchString(strings.ToLower(user.Name)) || (!p.SMBUser && strings.EqualFold(user.Name, p.User)) {
 			return errors.New("Time Machine requires distinct and valid SMB account names")
 		}
 	}
@@ -138,6 +143,28 @@ func ValidateTimeMachine(cfg *config.Config, target string) error {
 	return nil
 }
 
+// TimeMachineSMBUser resolves a single configured account and enforces its access.
+func TimeMachineSMBUser(users []config.User, name string, readOnly bool) (config.User, error) {
+	var match config.User
+	for _, user := range users {
+		if !strings.EqualFold(user.Name, name) {
+			continue
+		}
+		if match.Name != "" {
+			return config.User{}, errors.New("Time Machine SMB account name is ambiguous")
+		}
+		match = user
+	}
+	if !safeUser.MatchString(strings.ToLower(match.Name)) || strings.EqualFold(match.Name, "root") ||
+		strings.EqualFold(match.Name, "nobody") || !match.Enabled {
+		return config.User{}, errors.New("select an enabled SMB user for Time Machine")
+	}
+	if match.ReadOnly && !readOnly {
+		return config.User{}, errors.New("Time Machine requires an SMB user with write access")
+	}
+	return match, nil
+}
+
 func ValidatePassword(password string) error {
 	// Samba's PASSWD_FD credential reader accepts at most 127 bytes.
 	if len(password) > 127 || strings.ContainsAny(password, "\r\n\x00") ||
@@ -187,16 +214,6 @@ func SetPassword(ctx context.Context, conf, name, password string) error {
 	return nil
 }
 
-func DeletePassword(ctx context.Context, conf, name string) error {
-	if !HasAccount(ctx, conf, name) {
-		return nil
-	}
-	if err := exec.CommandContext(ctx, "smbpasswd", "-c", conf, "-x", name).Run(); err != nil {
-		return fmt.Errorf("cannot remove old Time Machine SMB account: %w", err)
-	}
-	return nil
-}
-
 func UnixIdentity(ctx context.Context, name string) (timemachine.Identity, error) {
 	var id timemachine.Identity
 	values := []*uint32{&id.UID, &id.GID}
@@ -227,10 +244,6 @@ func UnixIdentity(ctx context.Context, name string) (timemachine.Identity, error
 
 func UnixExists(ctx context.Context, name string) bool {
 	return exec.CommandContext(ctx, "id", "-u", name).Run() == nil
-}
-
-func CreateUnix(ctx context.Context, name string) error {
-	return exec.CommandContext(ctx, "adduser", "-D", "-H", "-s", "/bin/false", name).Run()
 }
 
 func DeleteUnix(ctx context.Context, name string) error {

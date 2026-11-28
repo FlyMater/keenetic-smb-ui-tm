@@ -140,29 +140,35 @@ func (s *Server) Shutdown(d time.Duration) error {
 func (s *Server) Bootstrap() {
 	s.operations.Lock()
 	go func() {
-		err := s.recoverTimeMachine()
-		if err != nil {
-			s.tm.recoveryError = err.Error()
-		}
-		if err == nil && s.cfg.SMB.Enabled {
+		startStack := func() {
+			if !s.cfg.SMB.Enabled {
+				return
+			}
 			if _, bindErr := s.smb.EnsureBindIP(); bindErr != nil {
 				log.Printf("bootstrap: bind ip: %v", bindErr)
 			}
 			ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
-			err = s.reconfigureSamba(ctx, true)
-			cancel()
+			defer cancel()
+			if err := s.reconfigureSamba(ctx, true); err != nil {
+				log.Printf("bootstrap: %v", err)
+			}
 		}
-		watchShares := s.cfg.SMB.Enabled && s.tm.recoveryError == ""
-		s.operations.Unlock()
-		if err != nil {
+		watching := false
+		watchShares := func() {
+			if !watching && s.cfg.SMB.Enabled && s.tm.recoveryError == "" {
+				watching = true
+				go s.shares.Watch(s.ctx, 30*time.Second)
+			}
+		}
+		if err := s.recoverTimeMachine(); err != nil {
+			s.tm.recoveryError = err.Error()
 			log.Printf("bootstrap: %v", err)
+		} else {
+			startStack()
+			watchShares()
 		}
-		// Mounts are reconciled in the background: a Proxmox host that is off
-		// during boot must not delay Samba or the UI. Watch keeps retrying and
-		// mounts each disk as soon as it answers.
-		if watchShares {
-			go s.shares.Watch(s.ctx, 30*time.Second)
-		}
+		s.operations.Unlock()
+
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -171,6 +177,17 @@ func (s *Server) Bootstrap() {
 				return
 			case <-ticker.C:
 				s.operations.Lock()
+				if s.tm.ownershipRecovery {
+					if err := s.recoverTimeMachine(); err != nil {
+						s.tm.recoveryError = err.Error()
+					} else {
+						s.tm.recoveryError = ""
+						startStack()
+						watchShares()
+					}
+					s.operations.Unlock()
+					continue
+				}
 				ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
 				if err := s.reconcileTimeMachine(ctx, false, false); err != nil {
 					log.Printf("Time Machine recovery: %v", err)
@@ -248,10 +265,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				incoming.Paths.SambaPidDir = c.Paths.SambaPidDir
 			}
 			incoming.TimeMachine = c.TimeMachine
+			incoming.SMB.AggregateDisabled = c.SMB.AggregateDisabled
 			if tmEnabled(c) {
 				if incoming.Paths != c.Paths || incoming.SMB.ListenIP != c.SMB.ListenIP ||
 					incoming.SMB.BindDevice != c.SMB.BindDevice || incoming.SMB.Ports != c.SMB.Ports {
 					return errors.New("disable Time Machine before changing the Samba listen address or runtime paths")
+				}
+				if err := validateTimeMachineUserChange(&incoming); err != nil {
+					return err
 				}
 				if err := samba.ValidateTimeMachine(&incoming, tmPath(&incoming)); err != nil {
 					return err
@@ -274,7 +295,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if c.TimeMachine != nil {
+			if c.TimeMachine != nil && !c.TimeMachine.SMBUser {
 				for _, user := range incoming.SMB.Users {
 					if strings.EqualFold(user.Name, c.TimeMachine.User) {
 						return errors.New("account is reserved for Time Machine")
@@ -284,6 +305,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			*c = incoming
 			return nil
 		})
+		if errors.Is(err, errTimeMachineUserInUse) {
+			tmError(w, err, http.StatusConflict)
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -454,13 +479,13 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.cfg.Update(func(c *config.Config) error {
+	err := s.cfg.Update(func(c *config.Config) error {
 		old := map[string]string{}
 		for _, u := range c.SMB.Users {
 			old[u.Name] = u.Password
 		}
 		for i := range users {
-			if c.TimeMachine != nil && strings.EqualFold(users[i].Name, c.TimeMachine.User) {
+			if c.TimeMachine != nil && !c.TimeMachine.SMBUser && strings.EqualFold(users[i].Name, c.TimeMachine.User) {
 				return errors.New("account is reserved for Time Machine")
 			}
 			if users[i].Password == "" {
@@ -469,10 +494,18 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		c.SMB.Users = users
 		if tmEnabled(c) {
+			if err := validateTimeMachineUserChange(c); err != nil {
+				return err
+			}
 			return samba.ValidateTimeMachine(c, tmPath(c))
 		}
 		return nil
-	}); err != nil {
+	})
+	if errors.Is(err, errTimeMachineUserInUse) {
+		tmError(w, err, http.StatusConflict)
+		return
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

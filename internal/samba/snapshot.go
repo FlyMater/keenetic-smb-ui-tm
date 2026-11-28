@@ -154,12 +154,23 @@ func (t *Transaction) NewAccount() (string, error) {
 }
 
 func (t *Transaction) Complete() error {
-	if err := os.Remove(filepath.Join(t.dir, "pending")); err != nil {
+	pending := filepath.Join(t.dir, "pending")
+	committed := filepath.Join(t.dir, "committed")
+	dir, err := os.Open(t.dir)
+	if err != nil {
 		return err
+	}
+	defer dir.Close()
+	if err := os.Rename(pending, committed); err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		return errors.Join(err, os.Rename(committed, pending))
 	}
 	for i := range t.paths {
 		_ = os.Remove(t.snapshot(i))
 	}
 	_ = os.Remove(filepath.Join(t.dir, "account"))
+	_ = os.Remove(committed)
 	return nil
 }
