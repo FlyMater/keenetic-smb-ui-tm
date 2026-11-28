@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
 )
 
 // TestEntwareTimeMachine exercises the package's Samba tools in a disposable

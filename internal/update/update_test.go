@@ -29,20 +29,20 @@ func responseClient(t *testing.T, wantURL string, code int, body string) *http.C
 	})}
 }
 
-func TestCheckForkRelease(t *testing.T) {
+func TestCheckProjectRelease(t *testing.T) {
 	const asset = "keenetic-smb-ui_1.8.2_aarch64-3.10.ipk"
 	const ownURL = "https://github.com/FlyMater/keenetic-smb-ui-tm/releases/download/v1.8.2/" + asset
-	const upstreamURL = "https://github.com/tommilevs/keenetic-smb-ui/releases/download/v1.8.2/" + asset
+	const foreignURL = "https://github.com/example/keenetic-smb-ui-tm/releases/download/v1.8.2/" + asset
 	tests := []struct {
 		name, current, url string
 		status             int
 		wantNewer, wantURL bool
 		wantError          bool
 	}{
-		{name: "release from fork", current: "1.8.1", url: ownURL, status: 200, wantNewer: true, wantURL: true},
+		{name: "release from project repository", current: "1.8.1", url: ownURL, status: 200, wantNewer: true, wantURL: true},
 		{name: "current version", current: "1.8.2", url: ownURL, status: 200},
 		{name: "older version", current: "1.8.3", url: ownURL, status: 200},
-		{name: "upstream asset rejected", current: "1.8.1", url: upstreamURL, status: 200, wantNewer: true, wantError: true},
+		{name: "foreign asset rejected", current: "1.8.1", url: foreignURL, status: 200, wantNewer: true, wantError: true},
 		{name: "no published release", current: "1.8.1", status: 404, wantError: true},
 	}
 	for _, tc := range tests {

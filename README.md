@@ -6,9 +6,9 @@
 
 **English** · [Русский](README.ru.md)
 
-[Overview](#why) · [Features](#features) · [Install](#install) · [Web UI](#web-ui) · [Disks](#aggregated-disks) · [Proxmox example](#wiring-several-proxmox-hosts-worked-example) · [Folder ACL](#folder-permissions) · [Users](#users) · [Updates](#updates) · [Configuration](#configuration) · [Releases](../../releases) · [Issues](../../issues)
+[Overview](#why) · [Features](#features) · [Install](#install) · [Web UI](#web-ui) · [Disks](#aggregated-disks) · [Proxmox example](#wiring-several-proxmox-hosts-worked-example) · [Folder ACL](#folder-permissions) · [Users](#users) · [Time Machine](#time-machine) · [Updates](#updates) · [Configuration](#configuration) · [Releases](https://github.com/FlyMater/keenetic-smb-ui-tm/releases) · [Issues](https://github.com/FlyMater/keenetic-smb-ui-tm/issues)
 
-[![release](https://img.shields.io/github/v/release/tommilevs/keenetic-smb-ui?style=flat-square&label=release&color=4ea1ff)](../../releases)
+[![release](https://img.shields.io/github/v/release/FlyMater/keenetic-smb-ui-tm?style=flat-square&label=release&color=4ea1ff)](https://github.com/FlyMater/keenetic-smb-ui-tm/releases)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-3ddc97?style=flat-square)](LICENSE)
 [![go](https://img.shields.io/badge/go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![platform](https://img.shields.io/badge/platform-Keenetic%20%2F%20Entware-7b5cff?style=flat-square)](https://entware.net)
@@ -16,6 +16,8 @@
 [![opkg](https://img.shields.io/badge/package-.ipk-ff6b6b?style=flat-square)](#install)
 
 </div>
+
+The project is maintained in [FlyMater/keenetic-smb-ui-tm](https://github.com/FlyMater/keenetic-smb-ui-tm).
 
 ## Why
 
@@ -81,37 +83,29 @@ SMB 2.1, the newest dialect Keenetic's 4.9 kernel supports.
 
 ## Install
 
-```sh
-# one-time: add the project feed
-echo "src/gz keenetic-smb-ui https://github.com/tommilevs/keenetic-smb-ui/releases/latest/download" \
-  >> /opt/etc/opkg.conf
-
-# then install — the feed carries the app AND the full Samba dependency set
-opkg update
-opkg install keenetic-smb-ui
-```
-
-The release contains `samba4-server`, `samba4-client` and their whole dependency
-closure (`samba4-libs`, `libgnutls`, `libopenssl`, `icu`, `libpam`, `libtirpc`, …) for
-`aarch64-3.10`, `armv7-3.2`, `mipsel-3.4` and `mips-3.4`. `opkg` resolves everything
-from the same URL, so the install still works if the Entware feed ever loses or
-changes those packages.
-
-<details>
-<summary><b>Manual install without a feed</b></summary>
+Open [GitHub Releases](https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest) and choose the `.ipk`
+matching your Entware architecture (`opkg print-architecture`). The example
+uses ARM64. Set `VERSION` to the version you selected, without the `v` prefix.
 
 ```sh
 opkg update
-opkg install samba4-server samba4-client
+opkg install samba4-server samba4-client blkid
 
-# busybox wget on Keenetic has no TLS — use curl
-curl -fsSL -O https://github.com/tommilevs/keenetic-smb-ui/releases/latest/download/keenetic-smb-ui_1.5.0_aarch64-3.10.ipk
-opkg install ./keenetic-smb-ui_1.5.0_aarch64-3.10.ipk
+VERSION=1.8.3
+PACKAGE=keenetic-smb-ui_${VERSION}_aarch64-3.10.ipk
+curl -fsSLO "https://github.com/FlyMater/keenetic-smb-ui-tm/releases/download/v${VERSION}/$PACKAGE" &&
+  opkg install "./$PACKAGE"
 
 /opt/etc/init.d/S99keenetic-smb-ui status
 ```
 
-</details>
+If you previously added a `keenetic-smb-ui` feed, remove its entry from
+`/opt/etc/opkg.conf`. You can add the entry below when the latest release
+provides `Packages.gz` and the corresponding `.ipk` files.
+
+```text
+src/gz keenetic-smb-ui https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest/download
+```
 
 <details>
 <summary><b>Build from source</b></summary>
@@ -138,6 +132,7 @@ internet access required.
 | **SMB server** | IP, bridge, workgroup, server name, share name/path, ports, protocols, guest, read-only, `force user`, extra `smb.conf` lines, start/stop/restart, config preview |
 | **Disks** | remote shares CRUD, enable/disable, read-only flag, live mount status |
 | **Users** | SMB accounts, per-user password and read-only, one-click import from NDMS |
+| **Time Machine** | dedicated USB destination, SMB account, backup size limit, Bonjour and connection checks |
 | **Folder access** | «Files and folders» dialog: folder tree with sizes, create folder, per-user read/write/deny with inheritance |
 | **Statistics** | uptime, load, memory, network, SMB sessions, history chart |
 | **Logs** | tail of the managed `samba.log` |
@@ -289,15 +284,31 @@ Two ways to add SMB accounts:
 Passwords are written with `smbpasswd`, so the router's own password store stays
 untouched.
 
+## Time Machine
+
+Open **Time Machine** in the panel and select a USB volume and, optionally, a
+directory. Set the SMB share name, a dedicated username and password, and an
+optional backup size limit. Run **Check connection**, then **Apply**.
+
+Select the share in macOS Time Machine. If Bonjour discovery is unavailable,
+connect in Finder using the SMB address shown in the panel's diagnostics.
+While Time Machine mode is enabled, local USB volumes are hidden from the
+aggregate share and its folder shares. Remote shares remain available.
+
 ## Updates
 
-The panel talks to the GitHub Releases API directly:
+Since version 1.8.1, **Settings → Check for updates** uses
+[the FlyMater releases](https://github.com/FlyMater/keenetic-smb-ui-tm/releases). For
+older installations, download the current package and install it manually.
 
 - **Check** compares the running version with the latest tag and picks the asset for
   the device architecture (`opkg status keenetic-smb-ui` first, `uname -m` fallback).
 - **Install** downloads the `.ipk` with `curl`, runs `opkg install --force-reinstall`
   and restarts the service in the background. The configuration is a `conffile`, so it
-  survives upgrades.
+  survives upgrades. Installation errors appear in
+  `/opt/var/keenetic-smb-ui/log/app.log`.
+
+See [the release process](CONTRIBUTING.md#release-process) for publishing updates.
 
 ## Configuration
 
@@ -345,9 +356,6 @@ aggregated tree mixes root-owned CIFS mounts with router disks.
 | `mips-3.4` | 8.3 MB | built, not run on hardware |
 | `x64-3.2` | 7.5 MB | built, runs under Entware x86_64 |
 | `x86-2.6` | 7.3 MB | built, runs under Entware i386 |
-
-Samba and its dependencies are shipped inside the release for the four Keenetic
-architectures, so a router does not depend on the Entware feed staying intact.
 
 ## Security notes
 

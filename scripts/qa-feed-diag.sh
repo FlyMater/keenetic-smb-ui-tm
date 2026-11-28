@@ -1,4 +1,5 @@
 #!/bin/sh
+BASE="${1:-https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest/download}"
 export PATH=/opt/sbin:/opt/bin:$PATH
 echo "=== restore samba4-client from the normal Entware feed first"
 opkg update >/dev/null 2>&1
@@ -8,7 +9,7 @@ command -v smbclient >/dev/null && echo "smbclient restored: $(smbclient --versi
 echo "=== fetch our Packages index and keep only aarch64 stanzas"
 mkdir -p /tmp/minfeed
 rm -f /tmp/minfeed/*
-curl -fsSL -o /tmp/Packages.ours https://github.com/tommilevs/keenetic-smb-ui/releases/download/v1.5.0/Packages
+curl -fsSL -o /tmp/Packages.ours "$BASE/Packages"
 awk 'BEGIN{RS="";ORS="\n\n"} /Architecture: aarch64-3.10/' /tmp/Packages.ours > /tmp/minfeed/Packages
 grep -c '^Package: ' /tmp/minfeed/Packages
 gzip -kc /tmp/minfeed/Packages > /tmp/minfeed/Packages.gz

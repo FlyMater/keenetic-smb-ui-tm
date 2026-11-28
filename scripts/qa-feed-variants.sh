@@ -1,8 +1,9 @@
 #!/bin/sh
+BASE="${1:-https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest/download}"
 export PATH=/opt/sbin:/opt/bin:$PATH
 mkdir -p /tmp/v && cd /tmp/v
 
-curl -fsSL -o full.Packages https://github.com/tommilevs/keenetic-smb-ui/releases/download/v1.5.0/Packages
+curl -fsSL -o full.Packages "$BASE/Packages"
 awk 'BEGIN{RS="";ORS="\n\n"} /Architecture: aarch64-3.10/' full.Packages > arch.Packages
 awk 'BEGIN{RS="";ORS="\n\n"} /^Package: keenetic-smb-ui/' full.Packages > app.Packages
 for f in full arch app; do

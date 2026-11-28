@@ -1,15 +1,16 @@
 Package: keenetic-smb-ui
 Version: __VERSION__
 Depends: libc, samba4-server, samba4-client, blkid
-Source: https://github.com/tommilevs/keenetic-smb-ui
+Source: https://github.com/FlyMater/keenetic-smb-ui-tm
 SourceName: keenetic-smb-ui
 License: AGPL-3.0-or-later
 Section: net
-URL: https://github.com/tommilevs/keenetic-smb-ui
-Maintainer: tommilevs <https://github.com/tommilevs>
+URL: https://github.com/FlyMater/keenetic-smb-ui-tm
+Maintainer: FlyMater <https://github.com/FlyMater>
 Architecture: __ARCH__
 Installed-Size: __SIZE__
 Description: SMB server manager with a web UI for Keenetic/Entware routers.
  Runs a private Samba instance bound to a dedicated IP, aggregates external
  SMB shares and local disks, and configures a separate Time Machine
  destination through a built-in web panel.
+ Based on keenetic-smb-ui by tommilevs (https://github.com/tommilevs/keenetic-smb-ui).

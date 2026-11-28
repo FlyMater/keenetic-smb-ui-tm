@@ -7,7 +7,7 @@ The latest release on GitHub is supported. Older releases receive no fixes.
 ## Reporting a vulnerability
 
 Do not open a public issue. Contact the maintainer through GitHub
-(`@tommilevs`) with:
+([@FlyMater](https://github.com/FlyMater)) with:
 
 - affected version and Entware architecture,
 - minimal reproduction or the exact request/command,

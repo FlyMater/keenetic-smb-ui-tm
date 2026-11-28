@@ -1,6 +1,6 @@
 #!/bin/sh
 export PATH=/opt/sbin:/opt/bin:$PATH
-BASE=https://github.com/tommilevs/keenetic-smb-ui/releases/download/v1.5.0
+BASE="${1:-https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest/download}"
 echo "=== what the CDN serves right now"
 curl -fsSL -o /tmp/gz.check "$BASE/Packages.gz" && gzip -dc /tmp/gz.check | grep -c '^Package: '
 echo "=== install app from the GitHub feed"

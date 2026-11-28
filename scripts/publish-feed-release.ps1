@@ -1,3 +1,9 @@
+param(
+  [Parameter(Mandatory = $true)]
+  [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')]
+  [string]$Tag
+)
+
 $ErrorActionPreference = 'Stop'
 
 # Take the GitHub token from the machine's git credential store instead of
@@ -8,12 +14,13 @@ $credLines = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
 $token = ($credLines -split "`n" | Where-Object { $_ -like 'password=*' }) -replace 'password=', ''
 if (-not $token) { throw 'no GitHub credential in the store' }
 
-$headers = @{ Authorization = "token $token"; 'User-Agent' = 'dsh'; Accept = 'application/vnd.github+json' }
-$repo = 'tommilevs/keenetic-smb-ui'
-$rel = 'C:\workspace\dsh\projects\keenetic-smb-ui\dist\feed\release'
-$notes = [IO.File]::ReadAllText('C:\workspace\dsh\projects\keenetic-smb-ui\dist\feed\release-notes.md', [Text.Encoding]::UTF8)
+$headers = @{ Authorization = "token $token"; 'User-Agent' = 'keenetic-smb-ui-tm'; Accept = 'application/vnd.github+json' }
+$repo = 'FlyMater/keenetic-smb-ui-tm'
+$feed = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist/feed'
+$rel = Join-Path $feed 'release'
+$notes = [IO.File]::ReadAllText((Join-Path $feed 'release-notes.md'), [Text.Encoding]::UTF8)
 
-$payload = @{ tag_name = 'v1.5.0'; name = 'v1.5.0 - vendored dependencies (opkg feed)'; body = $notes; draft = $false; prerelease = $false } | ConvertTo-Json -Compress
+$payload = @{ tag_name = $Tag; name = "$Tag - Entware opkg feed"; body = $notes; draft = $false; prerelease = $false } | ConvertTo-Json -Compress
 $relObj = Invoke-RestMethod "https://api.github.com/repos/$repo/releases" -Method Post -Headers $headers -Body ([Text.Encoding]::UTF8.GetBytes($payload)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 30
 Write-Host "release: $($relObj.tag_name) id=$($relObj.id)"
 

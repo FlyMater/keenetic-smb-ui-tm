@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
-	"github.com/tommilevs/keenetic-smb-ui/internal/samba"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/samba"
 )
 
 // handleFolders lists folder ACLs (GET) or replaces them (POST). The UI also

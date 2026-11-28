@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
-	"github.com/tommilevs/keenetic-smb-ui/internal/samba"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/samba"
 )
 
 // fsEntry is one row of the «Файлы и папки» list: a directory (or a file) of

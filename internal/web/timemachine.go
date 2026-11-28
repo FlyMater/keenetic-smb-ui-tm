@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
-	"github.com/tommilevs/keenetic-smb-ui/internal/samba"
-	"github.com/tommilevs/keenetic-smb-ui/internal/timemachine"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/samba"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/timemachine"
 )
 
 type timeMachineRuntime struct {
