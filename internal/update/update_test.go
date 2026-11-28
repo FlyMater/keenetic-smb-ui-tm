@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -14,6 +16,29 @@ import (
 type testTransport func(*http.Request) (*http.Response, error)
 
 func (fn testTransport) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
+
+func TestInstallCommandDoesNotUseShellPositionalArguments(t *testing.T) {
+	dir := t.TempDir()
+	opkg := filepath.Join(dir, "mock opkg")
+	pkg := filepath.Join(dir, "update package.ipk")
+	if err := os.WriteFile(opkg, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pkg, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := installCommand(opkg, pkg)
+	if len(cmd.Args) != 3 {
+		t.Fatalf("system shell received positional arguments after -c: %q", cmd.Args)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil || string(output) != "install\n"+pkg+"\n" {
+		t.Fatalf("installer output = %q, err = %v", output, err)
+	}
+	if _, err := os.Stat(pkg); !os.IsNotExist(err) {
+		t.Fatalf("temporary package remained after the command: %v", err)
+	}
+}
 
 func responseClient(t *testing.T, wantURL string, code int, body string) *http.Client {
 	t.Helper()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -174,19 +175,30 @@ func Install(ctx context.Context, info Info) error {
 	if err := errors.Join(err, pkg.Close()); err != nil {
 		return err
 	}
-	cmd := exec.Command("/bin/sh", "-c", `
-trap 'rm -f "$2"' EXIT
-sleep 2
-"$1" install "$2"
-`, "keenetic-smb-ui-update", opkg, pkg.Name())
+	cmd := installCommand(opkg, pkg.Name())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	handedOff = true
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("opkg update: %v", err)
+		}
+	}()
 	return nil
+}
+
+func installCommand(opkg, pkg string) *exec.Cmd {
+	// Keenetic's system shell drops positional arguments supplied after -c.
+	cmd := exec.Command("/bin/sh", "-c", `
+trap 'rm -f "$KEENETIC_UPDATE_PACKAGE"' EXIT
+sleep 2
+"$KEENETIC_UPDATE_OPKG" install "$KEENETIC_UPDATE_PACKAGE"
+`)
+	cmd.Env = append(cmd.Environ(), "KEENETIC_UPDATE_OPKG="+opkg, "KEENETIC_UPDATE_PACKAGE="+pkg)
+	return cmd
 }
 
 func downloadPackage(ctx context.Context, client *http.Client, info Info, dst io.Writer) error {
