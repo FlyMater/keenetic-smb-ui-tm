@@ -108,8 +108,10 @@ func (m *Manager) Root() string {
 
 // MountPoint returns where a remote is mounted locally.
 func (m *Manager) MountPoint(r config.Remote) string {
-	return filepath.Join(m.Root(), sanitize(r.Name))
+	return filepath.Join(m.Root(), m.Directory(r))
 }
+
+func (m *Manager) Directory(r config.Remote) string { return sanitize(r.Name) }
 
 func sanitize(s string) string {
 	s = strings.TrimSpace(s)
@@ -120,8 +122,7 @@ func sanitize(s string) string {
 	return repl.Replace(s)
 }
 
-// Apply ensures the aggregate root, symlinks to local disks and all enabled
-// remotes are mounted. Disabled or removed remotes are unmounted.
+// Apply ensures the aggregate root and all enabled remotes are mounted. Disabled or removed remotes are unmounted.
 func (m *Manager) Apply() []error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -136,23 +137,6 @@ func (m *Manager) Apply() []error {
 	}
 
 	cfg := m.cfg.Snapshot()
-	// Samba suppresses legacy USB entries while Time Machine is active.
-	if cfg.TimeMachine == nil || !cfg.TimeMachine.Enabled {
-		if entries, err := os.ReadDir("/tmp/mnt"); err == nil {
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				src := filepath.Join("/tmp/mnt", e.Name())
-				dst := filepath.Join(root, "local-"+e.Name())
-				if _, err := os.Lstat(dst); os.IsNotExist(err) {
-					if err := os.Symlink(src, dst); err != nil {
-						errs = append(errs, fmt.Errorf("symlink %s: %w", dst, err))
-					}
-				}
-			}
-		}
-	}
 
 	for _, r := range cfg.Remotes {
 		mp := m.MountPoint(r)

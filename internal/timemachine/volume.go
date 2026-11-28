@@ -16,6 +16,7 @@ type Volume struct {
 	Filesystem string `json:"filesystem"`
 	Total      uint64 `json:"total"`
 	Free       uint64 `json:"free"`
+	ReadOnly   bool   `json:"readonly,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	mount      mount
 }
@@ -87,9 +88,15 @@ func FolderParts(path string) ([]string, error) {
 }
 
 func Find(volumes []Volume, uuid string) (Volume, error) {
+	return FindDisk(volumes, uuid, false)
+}
+
+const readOnlyVolume = "USB volume is mounted read-only"
+
+func FindDisk(volumes []Volume, uuid string, allowReadOnly bool) (Volume, error) {
 	for _, volume := range volumes {
 		if strings.EqualFold(volume.UUID, uuid) && uuid != "" {
-			if volume.Reason != "" {
+			if volume.Reason != "" && !(allowReadOnly && volume.Reason == readOnlyVolume) {
 				return Volume{}, errors.New(volume.Reason)
 			}
 			return volume, nil
@@ -119,12 +126,12 @@ func inventory(mounts []mount, entware blockDevice, serviceMount string, block f
 			continue
 		}
 		v := metadata(m)
-		v.MountPoint, v.Filesystem, v.mount = m.path, m.filesystem, m
+		v.MountPoint, v.Filesystem, v.mount, v.ReadOnly = m.path, m.filesystem, m, m.readOnly
 		switch {
 		case v.UUID == "":
 			v.Reason = "USB volume has no readable UUID"
 		case m.readOnly:
-			v.Reason = "USB volume is mounted read-only"
+			v.Reason = readOnlyVolume
 		}
 		if v.UUID != "" {
 			count[strings.ToLower(v.UUID)]++

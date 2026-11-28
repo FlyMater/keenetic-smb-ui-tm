@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/samba"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/timemachine"
 )
 
 // fsEntry is one row of the «Файлы и папки» list: a directory (or a file) of
@@ -147,21 +149,52 @@ func (s *Server) shareAbs(rel string) (string, error) {
 	if abs != root && !strings.HasPrefix(abs, root+string(os.PathSeparator)) {
 		return "", os.ErrPermission
 	}
-	if tmEnabled(s.cfg) && abs != root {
-		if samba.IsLocalPath(rel) {
-			return "", os.ErrPermission
+	if name := samba.LocalDirectory(rel); name != "" && !s.localDirectoryVisible(root, name) {
+		return "", os.ErrPermission
+	}
+	for path := abs; path != root; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue // mkdir validates the same ancestors before creating the leaf.
 		}
-		for path := abs; path != root; path = filepath.Dir(path) {
-			info, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(path)
 			if err != nil {
 				return "", err
 			}
-			if info.Mode()&os.ModeSymlink != 0 {
+			realRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				return "", err
+			}
+			if !timemachine.Contains(realRoot, resolved) {
+				return "", os.ErrPermission
+			}
+			resolvedRel, err := filepath.Rel(realRoot, resolved)
+			if err != nil {
+				return "", err
+			}
+			if name := samba.LocalDirectory(resolvedRel); name != "" && !s.localDirectoryVisible(root, name) {
 				return "", os.ErrPermission
 			}
 		}
 	}
 	return abs, nil
+}
+
+func (s *Server) localDirectoryVisible(root, name string) bool {
+	if s.tm.bindings[filepath.Join(root, name)] != nil {
+		return true
+	}
+	// Older configurations may have a network disk with the same prefix.
+	for _, remote := range s.cfg.Remotes {
+		if remote.Enabled && s.shares.Directory(remote) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // remoteRoots returns the mount points of network filesystems (CIFS/NFS) that
@@ -270,8 +303,13 @@ func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, d := range dirents {
 		name := d.Name()
-		if tmEnabled(s.cfg) && (d.Type()&os.ModeSymlink != 0 || samba.IsLocalPath(name)) {
+		if rel == "" && samba.LocalDirectory(name) != "" && !s.localDirectoryVisible(abs, name) {
 			continue
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if _, err := s.shareAbs(joinRel(rel, name)); err != nil {
+				continue
+			}
 		}
 		full := filepath.Join(abs, name)
 		e := fsEntry{Name: name, Path: joinRel(rel, name), Size: -1}

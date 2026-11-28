@@ -144,7 +144,7 @@ func (s *Server) legacyTimeMachine(ctx context.Context, cfg *config.Config) (*le
 	if err != nil {
 		return nil, -1, err
 	}
-	volumes, err := timemachine.Volumes(ctx, tmPath(cfg))
+	volumes, err := s.volumeInventory(ctx, cfg)
 	if err != nil {
 		return nil, -1, err
 	}
@@ -157,6 +157,9 @@ func (s *Server) legacyTimeMachine(ctx context.Context, cfg *config.Config) (*le
 	}
 	if chosen.UUID == "" {
 		return nil, -1, errors.New("USB volume unavailable")
+	}
+	if findDisk(cfg, chosen.UUID).TimeMachine != nil {
+		return nil, -1, nil
 	}
 	profile.UUID = chosen.UUID
 	if path != chosen.MountPoint {
@@ -197,7 +200,7 @@ func (s *Server) prepareTimeMachineMigration(ctx context.Context, old, next *con
 		return nil, err
 	}
 	// Re-read the source on check/apply and bind consent to the same target.
-	if preview == nil || !request.Enabled || request.UUID != preview.Profile.UUID ||
+	if preview == nil || !request.Enabled || !strings.EqualFold(request.UUID, preview.Profile.UUID) ||
 		request.Folder != preview.Profile.Folder || request.Share != preview.Profile.Share ||
 		request.User != preview.Profile.User || request.ReadOnly || request.CreateFolder {
 		return nil, errors.New("manual Time Machine settings changed; reload the migration preview")

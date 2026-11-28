@@ -82,6 +82,24 @@ type TimeMachine struct {
 	Bonjour  bool   `json:"bonjour"`
 }
 
+// LocalDisk records an explicit publication choice for a USB filesystem.
+type LocalDisk struct {
+	UUID        string       `json:"uuid"`
+	Directory   string       `json:"directory,omitempty"`
+	Publish     bool         `json:"publish"`
+	TimeMachine *TimeMachine `json:"time_machine,omitempty"`
+}
+
+// Disks includes the legacy singleton until the first save from the disk screen.
+func (c *Config) Disks() []LocalDisk {
+	if c.TimeMachine == nil || c.TimeMachine.UUID == "" {
+		return c.LocalDisks
+	}
+	return append(append([]LocalDisk(nil), c.LocalDisks...), LocalDisk{
+		UUID: c.TimeMachine.UUID, TimeMachine: c.TimeMachine,
+	})
+}
+
 // Paths describes runtime locations (not user editable via UI).
 type Paths struct {
 	ConfigFile  string `json:"-"`
@@ -103,6 +121,7 @@ type Config struct {
 	Stats       Stats        `json:"stats"`
 	Paths       Paths        `json:"paths"`
 	TimeMachine *TimeMachine `json:"time_machine,omitempty"`
+	LocalDisks  []LocalDisk  `json:"local_disks,omitempty"`
 }
 
 // mu serialises Save/Update across goroutines without living inside Config
@@ -279,6 +298,13 @@ func (c *Config) clone() Config {
 	copy.SMB.ExtraOptions = append([]string(nil), c.SMB.ExtraOptions...)
 	copy.Remotes = append([]Remote(nil), c.Remotes...)
 	copy.Folders = append([]Folder(nil), c.Folders...)
+	copy.LocalDisks = append([]LocalDisk(nil), c.LocalDisks...)
+	for i := range copy.LocalDisks {
+		if profile := copy.LocalDisks[i].TimeMachine; profile != nil {
+			value := *profile
+			copy.LocalDisks[i].TimeMachine = &value
+		}
+	}
 	if c.TimeMachine != nil {
 		profile := *c.TimeMachine
 		copy.TimeMachine = &profile

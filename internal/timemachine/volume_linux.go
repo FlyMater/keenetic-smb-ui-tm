@@ -70,7 +70,7 @@ func mountDevice(m mount) blockDevice {
 	return disk
 }
 
-func volumes(ctx context.Context, mounts []mount, entwarePath, serviceMount string) ([]Volume, error) {
+func volumes(ctx context.Context, mounts []mount, entwarePath string, serviceMounts ...string) ([]Volume, error) {
 	opt, err := filepath.EvalSymlinks(entwarePath)
 	if err != nil {
 		return nil, fmt.Errorf("locate Entware storage: %w", err)
@@ -96,10 +96,19 @@ func volumes(ctx context.Context, mounts []mount, entwarePath, serviceMount stri
 		return nil, errors.New("cannot isolate all physical disks backing Entware storage")
 	}
 	// mountinfo reports resolved paths, including when /opt is a symlink.
-	if parent, err := filepath.EvalSymlinks(filepath.Dir(serviceMount)); err == nil {
-		serviceMount = filepath.Join(parent, filepath.Base(serviceMount))
+	excluded := make(map[string]bool, len(serviceMounts))
+	for _, path := range serviceMounts {
+		if real, err := resolvePath(path); err == nil {
+			excluded[real] = true
+		}
 	}
-	return inventory(mounts, entware, serviceMount, mountDevice, func(m mount) Volume {
+	sources := make([]mount, 0, len(mounts))
+	for _, m := range mounts {
+		if !excluded[m.path] {
+			sources = append(sources, m)
+		}
+	}
+	return inventory(sources, entware, "", mountDevice, func(m mount) Volume {
 		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		out, _ := exec.CommandContext(probe, "blkid", "-c", "/dev/null", "-s", "UUID", "-o", "value", m.source).Output()
@@ -114,17 +123,21 @@ func volumes(ctx context.Context, mounts []mount, entwarePath, serviceMount stri
 	}), ctx.Err()
 }
 
-func Volumes(ctx context.Context, serviceMount string) ([]Volume, error) {
+func Volumes(ctx context.Context, serviceMounts ...string) ([]Volume, error) {
 	mounts, err := currentMounts()
 	if err != nil {
 		return nil, err
 	}
-	return volumes(ctx, mounts, "/opt", serviceMount)
+	return volumes(ctx, mounts, "/opt", serviceMounts...)
 }
 
 // ValidateAggregate rejects an aggregate that is itself on a USB mount or
 // contains USB bind mounts. The normal Entware /opt aggregate is permitted.
 func ValidateAggregate(path string, protected ...string) error {
+	return ValidateAggregateMounts(path, nil, protected...)
+}
+
+func ValidateAggregateMounts(path string, managed []string, protected ...string) error {
 	real, err := resolvePath(path)
 	if err != nil {
 		return err
@@ -153,7 +166,16 @@ func ValidateAggregate(path string, protected ...string) error {
 		ownerDisk.usb || ownerDisk.composite) {
 		return errors.New("aggregate is on USB storage or contains USB mount paths")
 	}
+	allowed := make(map[string]bool, len(managed))
+	for _, path := range managed {
+		if resolved, err := resolvePath(path); err == nil {
+			allowed[resolved] = true
+		}
+	}
 	for _, m := range mounts {
+		if allowed[m.path] {
+			continue
+		}
 		if m.id != owner.id && Contains(real, m.path) {
 			disk := mountDevice(m)
 			if !disk.usb && !disk.composite {
@@ -365,6 +387,19 @@ func (t *Target) Folders() ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// IsMount reports whether path is a mount point rather than a backing directory.
+func IsMount(path string) (bool, error) {
+	real, err := resolvePath(path)
+	if err != nil {
+		return false, err
+	}
+	mounts, err := currentMounts()
+	if err != nil {
+		return false, err
+	}
+	return coveringMount(mounts, real).path == real, nil
 }
 
 func (t *Target) Bind(path string) error {

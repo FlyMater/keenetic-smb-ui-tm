@@ -1,55 +1,274 @@
 'use strict';
 
 const tmEndpoint = '/api/time-machine';
+const diskEndpoint = '/api/local-disks';
+const diskDrafts = new Map();
+let diskState;
+let diskLoading = false;
+let activeDisk = '';
 let tmBrowsePath = '';
-let tmUsers = [];
-let tmProfile = null;
-let tmLegacy = null;
-let tmMigrating = false;
-const tmActionButtons = [$('tm-apply'), $('tm-check')];
 
-function tmMessage(message) {
-  $('tm-message').textContent = t(message);
-}
-
-function tmOption(value, text) {
+function tmOption(value, label) {
   const option = document.createElement('option');
   option.value = value;
-  option.textContent = text;
+  option.textContent = label;
   return option;
 }
 
-function tmRenderVolumes(volumes, selected) {
-  const picker = $('tm-volume');
-  const rows = $('tm-volumes');
-  picker.replaceChildren(tmOption('', t('Выберите том')));
-  rows.replaceChildren();
-  for (const volume of volumes) {
-    const row = document.createElement('tr');
-    for (const value of [
-      volume.mount_point, volume.filesystem, volume.uuid || '—', fmtBytes(volume.total),
-      fmtBytes(volume.free), t(volume.reason || 'Доступен'),
-    ]) {
-      const cell = document.createElement('td');
-      cell.textContent = value;
-      row.append(cell);
-    }
-    rows.append(row);
-    if (!volume.reason) picker.append(tmOption(volume.uuid, volume.mount_point));
-  }
-  if (selected && !Array.from(picker.options).some((option) => option.value === selected)) {
-    picker.append(tmOption(selected, t('Том недоступен') + ' (' + selected + ')'));
-  }
-  picker.value = selected || '';
+function diskVolume(uuid) {
+  return (diskState.volumes || []).find((volume) => volume.uuid.toLowerCase() === uuid);
 }
 
-function tmRenderDiagnostics(report) {
+function savedDisk(uuid) {
+  return (diskState.disks || []).find((disk) => disk.uuid.toLowerCase() === uuid);
+}
+
+function diskEdit(uuid) {
+  const saved = savedDisk(uuid);
+  return diskDrafts.get(uuid) || {
+    uuid,
+    publish: !!saved?.publish,
+    time_machine: saved?.time_machine ? { ...saved.time_machine } : undefined,
+  };
+}
+
+function newBackupProfile(uuid) {
+  const suffix = uuid.replace(/[^a-z0-9]/g, '');
+  const base = 'TimeMachine' + (suffix ? '-' + suffix.slice(0, 32) : '');
+  const occupied = new Set([
+    diskState.share,
+    ...(diskState.disks || []).map((disk) => disk.time_machine?.share),
+    ...Array.from(diskDrafts.values(), (disk) => disk.time_machine?.share),
+  ].filter(Boolean).map((name) => name.toLowerCase()));
+  let name = base;
+  for (let i = 2; occupied.has(name.toLowerCase()); i++) name = base + '-' + i;
+  return { uuid, enabled: true, folder: '', share: name, user: '', readonly: false, limit_gib: 0, bonjour: true };
+}
+
+function diskCell(row, content) {
+  const cell = row.insertCell();
+  if (content instanceof Node) cell.append(content);
+  else cell.textContent = content;
+}
+
+function diskCheckbox(label, checked, disabled, onChange) {
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = checked;
+  box.disabled = disabled;
+  box.setAttribute('aria-label', label);
+  box.onchange = () => onChange(box.checked);
+  return box;
+}
+
+function renderLocalDisks() {
+  const rows = $('local-disk-rows');
+  rows.replaceChildren();
+  const inventory = (diskState.volumes || []).map((volume) => [volume.uuid.toLowerCase(), volume]);
+  const connected = new Set(inventory.map(([uuid]) => uuid));
+  for (const saved of diskState.disks || []) {
+    const uuid = saved.uuid.toLowerCase();
+    if (!connected.has(uuid)) inventory.push([uuid, null]);
+  }
+  if (inventory.length === 0) {
+    const cell = rows.insertRow().insertCell();
+    cell.colSpan = 5;
+    cell.textContent = t('USB-диски не найдены');
+  }
+  for (const [uuid, volume] of inventory) {
+    const disk = diskEdit(uuid);
+    const saved = savedDisk(uuid);
+    const report = diskState.diagnostics?.[uuid];
+    const available = uuid && volume && (!volume.reason || volume.readonly && volume.reason === 'USB volume is mounted read-only');
+    const backup = disk.time_machine;
+    const label = volume?.mount_point || uuid;
+    const row = rows.insertRow();
+    diskCell(row, label);
+    diskCell(row, volume?.total ? fmtBytes(volume.free) + ' / ' + fmtBytes(volume.total) : '—');
+    diskCell(row, diskCheckbox(t('Публиковать по SMB') + ' — ' + label, disk.publish,
+      !available && !disk.publish, (publish) => {
+        const edit = diskEdit(uuid);
+        edit.publish = publish;
+        if (!publish && edit.time_machine?.enabled) {
+          edit.time_machine.enabled = false;
+          if (activeDisk === uuid) activeDisk = '';
+        }
+        diskDrafts.set(uuid, edit);
+        renderLocalDisks();
+        showBackupEditor();
+      }));
+    const backupControls = document.createElement('div');
+    backupControls.className = 'row';
+    backupControls.append(diskCheckbox('Time Machine — ' + label, !!backup?.enabled,
+      !backup?.enabled && (!available || volume.readonly || !disk.publish),
+      (enabled) => {
+        const edit = diskEdit(uuid);
+        edit.time_machine ||= newBackupProfile(uuid);
+        edit.time_machine.enabled = enabled;
+        if (!enabled) delete edit.time_machine.migration;
+        diskDrafts.set(uuid, edit);
+        if (enabled || activeDisk === uuid) activeDisk = enabled ? uuid : '';
+        renderLocalDisks();
+        showBackupEditor();
+      }));
+    if (backup?.enabled) {
+      const edit = document.createElement('button');
+      edit.className = 'btn ghost';
+      edit.type = 'button';
+      edit.textContent = t('Настроить');
+      edit.onclick = () => { activeDisk = uuid; showBackupEditor(); };
+      backupControls.append(edit);
+    }
+    diskCell(row, backupControls);
+    const status = [];
+    if (report?.published && saved?.directory) status.push(diskState.share + '/' + saved.directory);
+    if (report?.disk === 'ready') status.push(t('Time Machine доступен'));
+    if (report?.disk_error) status.push(t(report.disk_error));
+    else if (volume?.reason) status.push(t(volume.reason));
+    else if (!volume) status.push(t('Том недоступен'));
+    if (diskDrafts.has(uuid)) status.push(t('Есть изменения'));
+    diskCell(row, status.join(' · ') || t('Доступен'));
+  }
+  $('disk-apply').disabled = diskDrafts.size === 0;
+  $('tm-import').classList.toggle('hidden', !diskState.legacy || Array.from(diskDrafts.values()).some((disk) => disk.time_machine?.migration));
+}
+
+async function loadLocalDisks(force = false) {
+  if (diskLoading || !force && diskDrafts.size) return;
+  diskLoading = true;
+  $('disk-refresh').disabled = true;
+  try {
+    const incoming = await api(diskEndpoint);
+    if (!incoming.legacy && Array.from(diskDrafts.values()).some((disk) => disk.time_machine?.migration)) {
+      incoming.legacy = diskState.legacy;
+    }
+    diskState = incoming;
+    $('disk-message').textContent = t(diskState.inventory_error || '');
+    renderLocalDisks();
+    showBackupEditor();
+    return true;
+  } catch (error) {
+    $('disk-message').textContent = t(error.message);
+    return false;
+  } finally {
+    diskLoading = false;
+    $('disk-refresh').disabled = false;
+  }
+}
+
+function renderBackupUsers(profile) {
+  const users = (diskState.users || []).filter((user) => profile.readonly || !user.readonly);
+  const options = users.map((user) => tmOption(user.name, user.name));
+  if (profile.user && !users.some((user) => user.name === profile.user)) {
+    const legacy = savedDisk(activeDisk)?.time_machine;
+    if (legacy && !legacy.smb_user && legacy.user === profile.user) {
+      options.push(tmOption(legacy.user, legacy.user));
+    }
+  }
+  $('tm-user').replaceChildren(tmOption('', t('Выберите пользователя SMB')), ...options);
+  $('tm-user').value = options.some((option) => option.value === profile.user) ? profile.user : '';
+  $('tm-no-users').classList.toggle('hidden', options.length !== 0);
+}
+
+function showBackupEditor() {
+  const backup = activeDisk && diskEdit(activeDisk).time_machine;
+  $('tm-form').classList.toggle('hidden', !backup?.enabled);
+  $('tm-directory-picker').classList.add('hidden');
+  $('tm-details').classList.add('hidden');
+  $('tm-message').textContent = '';
+  if (!backup?.enabled) return;
+  const volume = diskVolume(activeDisk);
+  const migration = backup.migration;
+  $('tm-title').textContent = 'Time Machine — ' + (volume?.mount_point || activeDisk);
+  $('tm-legacy-target').textContent = migration ? diskState.legacy.target : '';
+  $('tm-folder').value = backup.folder || '';
+  $('tm-share').value = backup.share;
+  $('tm-limit').value = backup.limit_gib || 0;
+  $('tm-write').checked = !backup.readonly;
+  $('tm-bonjour').checked = !!backup.bonjour;
+  $('tm-create').checked = !!backup.create_folder;
+  for (const id of ['tm-share', 'tm-folder', 'tm-create', 'tm-browse', 'tm-write', 'tm-user']) {
+    $(id).disabled = !!migration;
+  }
+  $('tm-migration').classList.toggle('hidden', !migration);
+  if (migration) {
+    $('tm-owner').checked = migration.change_owner;
+    $('tm-bundle').replaceChildren(
+      tmOption('', t('Выберите резервную копию')),
+      ...diskState.legacy.bundles.map((bundle) => tmOption(bundle, bundle)),
+    );
+    $('tm-bundle').value = migration.bundle;
+  }
+  renderBackupUsers(backup);
+  showOwnershipPath();
+}
+
+function readBackupEditor() {
+  const edit = diskEdit(activeDisk);
+  const backup = edit.time_machine;
+  const migration = backup.migration;
+  edit.time_machine = {
+    ...backup,
+    folder: $('tm-folder').value,
+    share: $('tm-share').value.trim(),
+    user: migration ? backup.user : $('tm-user').value,
+    readonly: !$('tm-write').checked,
+    limit_gib: Number($('tm-limit').value || 0),
+    bonjour: $('tm-bonjour').checked,
+    create_folder: $('tm-create').checked,
+  };
+  if (migration) {
+    edit.time_machine.migration = { bundle: $('tm-bundle').value, change_owner: $('tm-owner').checked };
+  }
+  diskDrafts.set(activeDisk, edit);
+  return edit.time_machine;
+}
+
+function showOwnershipPath() {
+  const backup = activeDisk && diskEdit(activeDisk).time_machine;
+  const migration = backup?.migration;
+  $('tm-bundle').required = !!(migration?.change_owner && diskState.legacy.bundles.length);
+  $('tm-owner-path').textContent = migration?.change_owner
+    ? [diskState.legacy.target, migration.bundle].filter(Boolean).join(' / ')
+    : '';
+}
+
+function validateBackupDrafts() {
+  const selected = activeDisk;
+  for (const [uuid, edit] of diskDrafts) {
+    if (!edit.time_machine?.enabled) continue;
+    activeDisk = uuid;
+    showBackupEditor();
+    if (!$('tm-form').reportValidity()) return false;
+  }
+  activeDisk = selected;
+  showBackupEditor();
+  return true;
+}
+
+async function listBackupFolders(path) {
+  const uuid = activeDisk;
+  try {
+    const folders = await api(tmEndpoint + '/folders?' + new URLSearchParams({ uuid, path }));
+    if (activeDisk !== uuid) return;
+    tmBrowsePath = path;
+    $('tm-current-directory').textContent = path || t('Корень тома');
+    $('tm-directories').replaceChildren(...folders.map((name) => tmOption(name, name)));
+    $('tm-up').disabled = !path;
+    $('tm-enter').disabled = !folders.length;
+    $('tm-directory-picker').classList.remove('hidden');
+    $('tm-message').textContent = '';
+  } catch (error) {
+    $('tm-message').textContent = t(error.message);
+  }
+}
+
+function showBackupDiagnostics(report) {
   const labels = {
     smb: 'Служба SMB', disk: 'USB-том', permissions: 'Права доступа',
-    xattr: 'Расширенные атрибуты', limit_gib: 'Лимит копий, ГиБ',
-    smb_url: 'Адрес SMB', bonjour: 'Bonjour', disk_error: 'Проверка тома',
-    bonjour_error: 'Проверка Bonjour', apply_error: 'Ошибка применения',
-    recovery_error: 'Ошибка восстановления',
+    xattr: 'Расширенные атрибуты', limit_gib: 'Лимит копий, ГиБ', smb_url: 'Адрес SMB',
+    bonjour: 'Bonjour', disk_error: 'Проверка тома', bonjour_error: 'Проверка Bonjour',
+    apply_error: 'Ошибка применения', recovery_error: 'Ошибка восстановления',
   };
   const states = {
     running: 'работает', stopped: 'остановлен', disabled: 'отключено', ready: 'Доступен',
@@ -63,178 +282,104 @@ function tmRenderDiagnostics(report) {
   $('tm-details').classList.remove('hidden');
 }
 
-function tmRenderUsers(selected) {
-  const picker = $('tm-user');
-  const users = tmUsers.filter((user) => !$('tm-write').checked || !user.readonly);
-  const dedicated = tmProfile && !tmProfile.smb_user && tmProfile.user;
-  picker.replaceChildren(tmOption('', t('Выберите пользователя SMB')));
-  for (const user of users) picker.append(tmOption(user.name, user.name));
-  if (dedicated && !tmUsers.some((user) => user.name === dedicated)) {
-    picker.append(tmOption(dedicated, dedicated));
-  }
-  picker.value = Array.from(picker.options).some((option) => option.value === selected) ? selected : '';
-  picker.required = $('tm-enabled').checked;
-  $('tm-no-users').classList.toggle('hidden', picker.options.length > 1);
-}
-
-function tmSetProfile(profile) {
-  $('tm-enabled').checked = !!profile?.enabled;
-  $('tm-bonjour').checked = profile?.bonjour ?? true;
-  $('tm-write').checked = !(profile?.readonly ?? false);
-  $('tm-share').value = profile?.share || 'TimeMachine';
-  $('tm-folder').value = profile?.folder || '';
-  $('tm-limit').value = profile?.limit_gib || 0;
-  tmRenderUsers(profile?.user);
-}
-
-function tmSetMigrating(active) {
-  tmMigrating = active;
-  $('tm-import').classList.toggle('hidden', active);
-  $('tm-migration').classList.toggle('hidden', !active);
-  for (const id of ['tm-volume', 'tm-folder', 'tm-share', 'tm-user', 'tm-enabled', 'tm-write', 'tm-create', 'tm-browse']) {
-    $(id).disabled = active;
-  }
-  $('tm-owner').checked = false;
-  $('tm-owner-path').textContent = '';
-  $('tm-bundle').required = false;
-}
-
-async function loadTimeMachine() {
-  if ($('tm-apply').disabled) return;
-  $('tm-create').checked = false;
-  $('tm-directory-picker').classList.add('hidden');
+$('disk-refresh').onclick = () => loadLocalDisks(true);
+$('disk-apply').onclick = async () => {
+  if (!validateBackupDrafts()) return;
+  const section = $('smb-disks');
+  section.inert = true;
+  $('disk-message').textContent = t('Применяю настройки USB-дисков…');
   try {
-    const { profile, diagnostics, users, legacy } = await api(tmEndpoint);
-    tmUsers = users || [];
-    tmProfile = profile;
-    tmLegacy = legacy;
-    tmSetMigrating(false);
-    tmSetProfile(profile);
-    $('tm-legacy').classList.toggle('hidden', !legacy);
-    if (legacy) {
-      $('tm-legacy-target').textContent =
-        'smb://' + legacy.host + '/' + legacy.profile.share + ' · ' + legacy.target + ' · ' + legacy.profile.user;
+    await api(diskEndpoint, {
+      method: 'POST',
+      body: JSON.stringify({ disks: Array.from(diskDrafts.values()) }),
+    });
+    diskDrafts.clear();
+    if (await loadLocalDisks(true) && !diskState.inventory_error) {
+      $('disk-message').textContent = t('Сохранено.');
     }
-    tmRenderDiagnostics(diagnostics);
-    tmRenderVolumes(await api(tmEndpoint + '/volumes'), profile?.uuid);
-    tmMessage('');
   } catch (error) {
-    tmMessage(error.message);
+    $('disk-message').textContent = t(error.message);
+  } finally {
+    section.inert = false;
   }
-}
-
-function tmOwnershipChanged() {
-  const bundle = $('tm-bundle').value;
-  $('tm-bundle').required = $('tm-owner').checked && tmLegacy.bundles.length > 0;
-  $('tm-owner-path').textContent = $('tm-owner').checked
-    ? [tmLegacy.target, bundle ? tmLegacy.target + '/' + bundle : ''].filter(Boolean).join(' · ')
-    : '';
-}
+};
 
 $('tm-import').onclick = () => {
-  if (!tmUsers.some((user) => user.name === tmLegacy.profile.user && !user.readonly)) {
-    tmMessage('Для переноса нужен включённый пользователь SMB с правом записи.');
+  const legacy = diskState.legacy;
+  if (!(diskState.users || []).some((user) => user.name === legacy.profile.user && !user.readonly)) {
+    $('disk-message').textContent = t('Для переноса нужен включённый пользователь SMB с правом записи.');
     return;
   }
-  tmSetMigrating(true);
-  tmSetProfile(tmLegacy.profile);
-  $('tm-volume').value = tmLegacy.profile.uuid;
-  $('tm-directory-picker').classList.add('hidden');
-  $('tm-create').checked = false;
-  const bundles = tmLegacy.bundles;
-  $('tm-bundle').replaceChildren(
-    tmOption('', t(bundles.length ? 'Выберите резервную копию' : 'Резервные копии не найдены')),
-    ...bundles.map((bundle) => tmOption(bundle, bundle)),
-  );
-  if (bundles.length === 1) $('tm-bundle').value = bundles[0];
-  tmMessage('');
-};
-$('tm-cancel-import').onclick = loadTimeMachine;
-$('tm-owner').onchange = tmOwnershipChanged;
-$('tm-bundle').onchange = tmOwnershipChanged;
-$('tm-write').onchange = () => tmRenderUsers($('tm-user').value);
-$('tm-enabled').onchange = () => { $('tm-user').required = $('tm-enabled').checked; };
-
-async function tmListFolders(path) {
-  const uuid = $('tm-volume').value;
-  if (!uuid) {
-    tmMessage('Выберите том');
-    return;
-  }
-  try {
-    const folders = await api(tmEndpoint + '/folders?' + new URLSearchParams({ uuid, path }));
-    if ($('tm-volume').value !== uuid) return;
-    tmBrowsePath = path;
-    $('tm-current-directory').textContent = path || t('Корень тома');
-    $('tm-directories').replaceChildren(...folders.map((name) => tmOption(name, name)));
-    $('tm-up').disabled = !path;
-    $('tm-enter').disabled = !folders.length;
-    $('tm-directory-picker').classList.remove('hidden');
-    tmMessage('');
-  } catch (error) {
-    tmMessage(error.message);
-  }
-}
-
-async function tmAction(action) {
-  if ($('tm-apply').disabled || !$('tm-form').reportValidity()) return;
-  const payload = {
-    enabled: $('tm-enabled').checked,
-    uuid: $('tm-volume').value,
-    folder: $('tm-folder').value,
-    share: $('tm-share').value.trim(),
-    user: $('tm-user').value.trim(),
-    readonly: !$('tm-write').checked,
-    limit_gib: Number($('tm-limit').value || 0),
-    bonjour: $('tm-bonjour').checked,
-    create_folder: $('tm-create').checked,
-    ...(tmMigrating ? { migration: { bundle: $('tm-bundle').value, change_owner: $('tm-owner').checked } } : {}),
+  activeDisk = legacy.profile.uuid.toLowerCase();
+  const edit = diskEdit(activeDisk);
+  edit.time_machine = {
+    ...legacy.profile,
+    migration: { bundle: legacy.bundles.length === 1 ? legacy.bundles[0] : '', change_owner: false },
   };
-  const progress = action === 'apply' ? 'Применяю настройки Time Machine…' : 'Проверяю подключение Time Machine…';
-  let migrated = false;
-  await runButtonAction(tmActionButtons, $('tm-message'), progress, async () => {
-    const result = await api(tmEndpoint + '/' + action, { method: 'POST', body: JSON.stringify(payload) });
-    tmMessage({
-      applied: 'Настройки применены',
-      connected: 'Подключение SMB проверено',
-      preflight: 'Предварительные проверки пройдены. Примените настройки и подключитесь в Finder.',
-      check_in_finder: 'Права на каталог проверены. Подключитесь в Finder с паролем пользователя SMB.',
-      ownership_pending: 'Владелец изменится при применении. Затем мастер проверит запись в каталог.',
-    }[result.status]);
-    tmRenderDiagnostics(result.diagnostics);
-    if (action === 'apply') {
-      $('tm-create').checked = false;
-      migrated = tmMigrating;
-    }
-  });
-  if (migrated) {
-    await loadTimeMachine();
-    tmMessage('Существующий ресурс перенесён.');
-  }
-}
+  diskDrafts.set(activeDisk, edit);
+  renderLocalDisks();
+  showBackupEditor();
+};
 
-$('tm-form').addEventListener('submit', (event) => {
-  event.preventDefault();
-  tmAction('apply');
-});
-$('tm-check').onclick = () => tmAction('check');
-$('tm-diagnostics').onclick = async () => {
-  try {
-    tmRenderDiagnostics(await api(tmEndpoint + '/diagnostics'));
-    tmRenderVolumes(await api(tmEndpoint + '/volumes'), $('tm-volume').value);
-    tmMessage('');
-  } catch (error) {
-    tmMessage(error.message);
+$('tm-cancel-import').onclick = () => {
+  const edit = diskEdit(activeDisk);
+  if (edit.publish === !!savedDisk(activeDisk)?.publish) diskDrafts.delete(activeDisk);
+  else {
+    delete edit.time_machine;
+    diskDrafts.set(activeDisk, edit);
   }
+  activeDisk = '';
+  renderLocalDisks();
+  showBackupEditor();
 };
-$('tm-volume').onchange = () => {
-  $('tm-folder').value = '';
-  $('tm-directory-picker').classList.add('hidden');
-};
-$('tm-browse').onclick = () => tmListFolders('');
-$('tm-up').onclick = () => tmListFolders(tmBrowsePath.split('/').slice(0, -1).join('/'));
-$('tm-enter').onclick = () => tmListFolders([tmBrowsePath, $('tm-directories').value].filter(Boolean).join('/'));
+
+$('tm-form').onsubmit = (event) => event.preventDefault();
+$('tm-form').addEventListener('input', (event) => {
+  if (event.target.id === 'tm-directories') return;
+  const profile = readBackupEditor();
+  if (event.target.id === 'tm-write') {
+    renderBackupUsers(profile);
+    readBackupEditor();
+  }
+  showOwnershipPath();
+  renderLocalDisks();
+});
+
+$('tm-browse').onclick = () => listBackupFolders($('tm-folder').value);
+$('tm-up').onclick = () => listBackupFolders(tmBrowsePath.split('/').slice(0, -1).join('/'));
+$('tm-enter').onclick = () => listBackupFolders([tmBrowsePath, $('tm-directories').value].filter(Boolean).join('/'));
 $('tm-select-directory').onclick = () => {
   $('tm-folder').value = tmBrowsePath;
   $('tm-directory-picker').classList.add('hidden');
+  readBackupEditor();
+  renderLocalDisks();
+};
+
+$('tm-check').onclick = () => {
+  if (!$('tm-form').reportValidity()) return;
+  const uuid = activeDisk;
+  const profile = { ...diskEdit(uuid).time_machine, uuid };
+  const results = {
+    connected: 'Подключение SMB проверено.',
+    preflight: 'Том и права проверены. Примените настройки.',
+    check_in_finder: 'Проверьте подключение через Finder.',
+    ownership_pending: 'Права будут проверены после смены владельца.',
+  };
+  runButtonAction([$('tm-check'), $('tm-diagnostics')], $('tm-message'), 'Проверяю подключение Time Machine…', async () => {
+    const result = await api(tmEndpoint + '/check?uuid=' + encodeURIComponent(uuid), {
+      method: 'POST', body: JSON.stringify(profile),
+    });
+    if (activeDisk === uuid) $('tm-message').textContent = t(results[result.status] || result.status);
+  });
+};
+
+$('tm-diagnostics').onclick = () => {
+  const uuid = activeDisk;
+  runButtonAction([$('tm-diagnostics'), $('tm-check')], $('tm-message'), 'Загрузка настроек…', async () => {
+    const report = await api(tmEndpoint + '/diagnostics?uuid=' + encodeURIComponent(uuid));
+    if (activeDisk === uuid) {
+      $('tm-message').textContent = '';
+      showBackupDiagnostics(report);
+    }
+  });
 };

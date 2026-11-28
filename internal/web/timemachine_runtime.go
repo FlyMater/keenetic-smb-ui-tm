@@ -2,10 +2,15 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
@@ -13,23 +18,73 @@ import (
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/timemachine"
 )
 
-func (s *Server) switchTarget(cfg *config.Config, target *timemachine.Target) error {
-	path := tmPath(cfg)
-	if err := timemachine.Detach(path); err != nil {
-		return err
+type diskBindings map[string]*timemachine.Target
+
+func (bindings diskBindings) close(discard bool) {
+	for _, target := range bindings {
+		if discard {
+			_ = target.RemoveCreatedFolder()
+		}
+		_ = target.Close()
 	}
-	if target != nil {
-		return target.Bind(path)
-	}
-	return nil
 }
 
-func (s *Server) installSamba(ctx context.Context, cfg *config.Config, target *timemachine.Target, start, syncUsers bool) error {
-	path := ""
-	if target != nil {
-		path = tmPath(cfg)
+func (bindings diskBindings) same(other diskBindings) bool {
+	if len(bindings) != len(other) {
+		return false
 	}
-	if err := s.smb.WriteCandidate(cfg, path); err != nil {
+	for path, target := range bindings {
+		if previous := other[path]; previous == nil || previous.MountID != target.MountID || previous.Inode != target.Inode {
+			return false
+		}
+	}
+	return true
+}
+
+func backupPath(cfg *config.Config, uuid string) string {
+	key := sha256.Sum256([]byte(strings.ToLower(uuid)))
+	return filepath.Join(tmDir(cfg), "volumes", fmt.Sprintf("%x", key))
+}
+
+func (s *Server) remoteDirectories(cfg *config.Config) map[string]bool {
+	local := map[string]bool{}
+	for _, remote := range cfg.Remotes {
+		if remote.Enabled {
+			local[s.shares.Directory(remote)] = true
+		}
+	}
+	return local
+}
+
+func (s *Server) diskShares(cfg *config.Config, bindings diskBindings) (map[string]string, map[string]bool) {
+	backups, local := map[string]string{}, s.remoteDirectories(cfg)
+	for _, disk := range cfg.Disks() {
+		path := backupPath(cfg, disk.UUID)
+		if bindings[path] != nil {
+			backups[strings.ToLower(disk.UUID)] = path
+		}
+		if disk.Publish && bindings[filepath.Join(cfg.SMB.SharePath, disk.Directory)] != nil {
+			local[disk.Directory] = true
+		}
+	}
+	return backups, local
+}
+
+func (s *Server) volumeInventory(ctx context.Context, cfg *config.Config) ([]timemachine.Volume, error) {
+	return timemachine.Volumes(ctx, append(slices.Clone(s.tm.mounts), tmPath(cfg))...)
+}
+
+func (s *Server) validateAggregate(cfg *config.Config) error {
+	return timemachine.ValidateAggregateMounts(cfg.SMB.SharePath, s.tm.mounts, tmDir(cfg),
+		filepath.Dir(cfg.Paths.SambaConf), filepath.Dir(samba.PassDB))
+}
+
+func (s *Server) installation(ctx context.Context, cfg *config.Config, bindings diskBindings, syncUsers bool) error {
+	if err := s.validateAggregate(cfg); err != nil {
+		return err
+	}
+	backups, local := s.diskShares(cfg, bindings)
+	if err := s.smb.WriteCandidate(cfg, backups, local); err != nil {
 		return err
 	}
 	if syncUsers {
@@ -37,10 +92,10 @@ func (s *Server) installSamba(ctx context.Context, cfg *config.Config, target *t
 			return err
 		}
 	}
-	if !start || !cfg.SMB.Enabled {
+	if s.tm.paused || !cfg.SMB.Enabled {
 		return nil
 	}
-	if tmEnabled(cfg) {
+	if len(backups) != 0 {
 		if err := samba.EnsurePortFree(cfg.SMB.ListenIP); err != nil {
 			return err
 		}
@@ -48,217 +103,143 @@ func (s *Server) installSamba(ctx context.Context, cfg *config.Config, target *t
 	if err := s.smb.StartInstalled(ctx, cfg); err != nil {
 		return err
 	}
-	if tmEnabled(cfg) {
+	if len(backups) != 0 {
 		return samba.CheckListener(ctx, cfg.SMB.ListenIP)
 	}
 	return nil
 }
 
-func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineRequest) (result error) {
-	old := s.cfg.Snapshot()
-	next := s.cfg.Snapshot()
-	migration, err := s.prepareTimeMachineMigration(ctx, &old, &next, &request)
+func (s *Server) recordMounts(cfg *config.Config, paths []string) error {
+	if len(paths) == 0 && len(s.tm.mounts) == 0 {
+		return nil
+	}
+	dir := tmDir(cfg)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, ".mounts-*")
 	if err != nil {
 		return err
 	}
-	p := &request.TimeMachine
-	if !p.Enabled {
-		if old.TimeMachine == nil || !old.TimeMachine.Enabled {
-			return nil
-		}
-		saved := *old.TimeMachine
-		saved.Enabled = false
-		p = &saved
-	}
-	next.TimeMachine = p
-	var volume timemachine.Volume
-	var identity timemachine.Identity
-	var password string
-	if p.Enabled {
-		password, err = timeMachineAccount(&old, p)
-		if err != nil {
-			return err
-		}
-		volume, err = s.validateTimeMachine(ctx, &next, request)
-		if err != nil {
-			return err
-		}
-		identity, err = existingTimeMachineIdentity(ctx, &next)
-		if err != nil {
-			return err
-		}
-	}
-	path := ""
-	if p.Enabled {
-		path = tmPath(&next)
-	}
-	if err := samba.ValidateCandidate(ctx, &next, path); err != nil {
+	defer os.Remove(file.Name())
+	encodeErr := json.NewEncoder(file).Encode(paths)
+	if err := errors.Join(encodeErr, file.Sync(), file.Close()); err != nil {
 		return err
 	}
-	tx, err := tmTransaction(&old)
+	if err := os.Rename(file.Name(), filepath.Join(dir, "mounts.json")); err != nil {
+		return err
+	}
+	s.tm.mounts = paths
+	parent, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	if !tx.Pending() {
-		if err := os.Remove(tmOwnershipPath(&old)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	if err := tx.Prepare(); err != nil {
+	return errors.Join(parent.Sync(), parent.Close())
+}
+
+func detachDisk(path string) error {
+	if err := timemachine.Detach(path); err != nil {
 		return err
 	}
-	previousTarget := s.tm.target
-	wasRunning := s.smb.Running()
-	var target *timemachine.Target
-	var stopAttempted, bindingChanged, startAttempted, ownerChangeStarted bool
-	defer func() {
-		if result == nil {
-			if target != nil {
-				target.KeepCreatedFolder()
-			}
-			if previousTarget != nil {
-				_ = previousTarget.Close()
-			}
-			return
-		}
-		if target != nil {
-			defer target.Close()
-		}
-		if startAttempted {
-			if err := s.smb.StopInstalled(&next); err != nil {
-				result = errors.Join(result, fmt.Errorf("rollback stop: %w", err))
-				s.tm.recoveryError = result.Error()
-				return
-			}
-		}
-		var bindErr, restoreErr, startErr, ownerErr error
-		if ownerChangeStarted {
-			ownerCtx, cancelOwner := context.WithTimeout(context.Background(), 15*time.Minute)
-			ownerErr = applyTimeMachineOwnership(ownerCtx, &old, target, true)
-			cancelOwner()
-			s.tm.ownershipRecovery = ownerErr != nil
-		}
-		if bindingChanged {
-			bindErr = s.switchTarget(&old, previousTarget)
-			restoreErr = tx.Restore()
-			s.cfg.Replace(old)
-		}
-		var folderErr error
-		if target != nil {
-			folderErr = target.RemoveCreatedFolder()
-		}
-		rollback, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if stopAttempted && wasRunning && restoreErr == nil && ownerErr == nil && (bindErr == nil || previousTarget == nil) {
-			startErr = s.smb.StartInstalled(rollback, &old)
-		}
-		accountCtx, cancelAccount := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancelAccount()
-		userErr := rollbackAccount(accountCtx, tx)
-		var completeErr error
-		if bindErr == nil && restoreErr == nil && startErr == nil && userErr == nil && ownerErr == nil {
-			completeErr = tx.Complete()
-			if completeErr == nil {
-				_ = os.Remove(tmOwnershipPath(&old))
-			}
-		}
-		result = errors.Join(result, bindErr, restoreErr, startErr, folderErr, userErr, ownerErr, completeErr)
-		if bindErr != nil || restoreErr != nil || startErr != nil || userErr != nil || ownerErr != nil || completeErr != nil {
-			s.tm.recoveryError = result.Error()
-		}
-		if stopAttempted {
-			s.updateBonjour(rollback)
-		}
-	}()
-	if p.Enabled {
-		var create *timemachine.Identity
-		if request.CreateFolder && p.Folder != "" {
-			create = &identity
-		}
-		target, err = timemachine.OpenTarget(volume, p.Folder, create)
-		if err != nil {
-			return err
-		}
-		if migration != nil && request.Migration.ChangeOwner {
-			if err := target.CheckOwnershipSupport(identity); err != nil {
-				return err
-			}
-		} else if err := target.Probe(ctx, identity, p.ReadOnly); err != nil {
-			if migration != nil && !p.ReadOnly {
-				return errOwnershipRequired
-			}
-			return err
-		}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	stopAttempted = true
-	if err := s.smb.StopInstalled(&old); err != nil {
+	if err != nil {
 		return err
 	}
-	s.clearBonjour()
-	if err := tx.Capture(); err != nil {
-		return err
+	if !info.IsDir() || info.Mode().Perm() != 0 {
+		return fmt.Errorf("unexpected USB mount backing directory: %s", path)
 	}
-	if migration != nil && request.Migration.ChangeOwner {
-		if err := saveTimeMachineOwnership(ctx, &next, target, identity, request.Migration.Bundle); err != nil {
-			return err
-		}
-		ownerChangeStarted = true
-		if err := applyTimeMachineOwnership(ctx, &next, target, false); err != nil {
-			return err
-		}
-		if err := target.Probe(ctx, identity, p.ReadOnly); err != nil {
-			return err
-		}
-	}
-	bindingChanged = true
-	if err := s.switchTarget(&next, target); err != nil {
-		return err
-	}
-	if err := s.installSamba(ctx, &next, target, false, false); err != nil {
-		return err
-	}
-	if next.SMB.Enabled && !s.tm.paused {
-		if p.Enabled {
-			if err := samba.EnsurePortFree(next.SMB.ListenIP); err != nil {
-				return err
-			}
-		}
-		startAttempted = true
-		if err := s.smb.StartInstalled(ctx, &next); err != nil {
-			return err
-		}
-		if p.Enabled {
-			if err := samba.CheckListener(ctx, next.SMB.ListenIP); err != nil {
-				return err
-			}
-			if password != "" && samba.ValidatePassword(password) == nil {
-				if err := samba.CheckSMB(ctx, &next, password); err != nil {
+	return os.Remove(path)
+}
+
+// switchBindings journals the exact destinations before mounting anything.
+// Recovery can then withdraw mounts even if the new configuration was never saved.
+func (s *Server) switchBindings(cfg *config.Config, next diskBindings) error {
+	oldPaths := slices.Clone(s.tm.mounts)
+	union := slices.Clone(oldPaths)
+	paths := make([]string, 0, len(next))
+	for path := range next {
+		paths = append(paths, path)
+		if !slices.Contains(oldPaths, path) {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				if err != nil {
 					return err
 				}
+				return fmt.Errorf("USB publication path already exists: %s", path)
 			}
+			union = append(union, path)
 		}
 	}
-	if err := s.cfg.Update(func(cfg *config.Config) error {
-		cfg.TimeMachine = p
-		if migration != nil {
-			cfg.SMB.ExtraOptions = next.SMB.ExtraOptions
-			cfg.SMB.AggregateDisabled = next.SMB.AggregateDisabled
-		}
-		return nil
-	}); err != nil {
+	sort.Strings(paths)
+	if err := s.recordMounts(cfg, union); err != nil {
 		return err
 	}
-	if migration != nil {
-		if err := syncMigrationConfig(&next); err != nil {
+	for _, path := range oldPaths {
+		if err := detachDisk(path); err != nil {
 			return err
 		}
 	}
-	if err := tx.Complete(); err != nil {
+	for _, path := range paths {
+		if err := next[path].Bind(path); err != nil {
+			return err
+		}
+	}
+	return s.recordMounts(cfg, paths)
+}
+
+func (s *Server) stopDiskBindings(cfg *config.Config) error {
+	if err := s.switchBindings(cfg, nil); err != nil {
 		return err
 	}
-	_ = os.Remove(tmOwnershipPath(&old))
-	s.tm.target, s.tm.diskError = target, ""
-	s.updateBonjour(ctx)
+	s.tm.bindings.close(false)
+	s.tm.bindings = nil
+	return nil
+}
+
+func legacyDiskLink(path string) bool {
+	name, ok := strings.CutPrefix(filepath.Base(path), "local-")
+	if !ok || name == "" {
+		return false
+	}
+	target, err := os.Readlink(path)
+	return err == nil && target == filepath.Join("/tmp/mnt", name)
+}
+
+func (s *Server) checkPublicationPath(path string, allowLegacyLink bool) error {
+	if slices.Contains(s.tm.mounts, path) {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if allowLegacyLink && info.Mode()&os.ModeSymlink != 0 && legacyDiskLink(path) {
+		return nil
+	}
+	return fmt.Errorf("USB publication path already exists: %s", path)
+}
+
+func removeLegacyDiskLinks(root string) error {
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 && legacyDiskLink(path) {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -268,13 +249,20 @@ func (s *Server) clearBonjour() {
 }
 
 func (s *Server) updateBonjour(ctx context.Context) {
-	p := s.cfg.TimeMachine
-	if p == nil || !p.Enabled || !p.Bonjour || p.ReadOnly || s.tm.target == nil || !s.smb.Running() {
+	backups, _ := s.diskShares(s.cfg, s.tm.bindings)
+	var advertised []string
+	for _, disk := range s.cfg.Disks() {
+		if p := disk.TimeMachine; p != nil && p.Bonjour && !p.ReadOnly && backups[strings.ToLower(disk.UUID)] != "" {
+			advertised = append(advertised, p.Share)
+		}
+	}
+	if len(advertised) == 0 || !s.smb.Running() {
 		s.clearBonjour()
 		return
 	}
+	sort.Strings(advertised)
 	err := s.tm.bonjour.Publish(ctx, timemachine.Announcement{
-		Interface: s.cfg.SMB.BindDevice, IP: s.cfg.SMB.ListenIP, Share: p.Share,
+		Interface: s.cfg.SMB.BindDevice, IP: s.cfg.SMB.ListenIP, Shares: advertised,
 	})
 	s.tm.advertised, s.tm.bonjourError = err == nil, ""
 	if err != nil {
@@ -282,158 +270,113 @@ func (s *Server) updateBonjour(ctx context.Context) {
 	}
 }
 
-// reconfigureSamba is used by the existing service and settings operations as
-// well as hotplug reconciliation. The caller holds the server operation lock.
 func (s *Server) reconfigureSamba(ctx context.Context, syncUsers bool) error {
-	cfg := s.cfg.Snapshot()
-	if !tmEnabled(&cfg) {
-		if err := s.smb.StopInstalled(&cfg); err != nil {
-			return err
-		}
-		return s.installSamba(ctx, &cfg, nil, !s.tm.paused, syncUsers)
-	}
 	return s.reconcileTimeMachine(ctx, true, syncUsers)
 }
 
 func (s *Server) reconcileTimeMachine(ctx context.Context, force, syncUsers bool) error {
-	cfg := s.cfg.Snapshot()
-	if !tmEnabled(&cfg) || s.tm.paused || s.tm.recoveryError != "" {
+	if s.tm.recoveryError != "" || (!force && (s.tm.paused || !s.cfg.SMB.Enabled || !hasDiskSelection(s.cfg))) {
 		return nil
 	}
-	if err := samba.ValidateTimeMachine(&cfg, tmPath(&cfg)); err != nil {
-		return s.withdrawTimeMachine(err)
+	cfg := s.cfg.Snapshot()
+	var next diskBindings
+	var statuses map[string]string
+	if cfg.SMB.Enabled && !s.tm.paused && hasDiskSelection(&cfg) {
+		next, statuses, _ = s.openDiskBindings(ctx, &cfg, nil, nil, "")
 	}
-	if err := samba.CheckAvailable(&cfg); err != nil {
-		return s.withdrawTimeMachine(err)
-	}
-	if err := validateTimeMachineAggregate(&cfg); err != nil {
-		return s.withdrawTimeMachine(err)
-	}
-	volume, err := selectVolume(ctx, &cfg)
-	var target *timemachine.Target
-	if err == nil {
-		target, err = timemachine.OpenTarget(volume, cfg.TimeMachine.Folder, nil)
-	}
-	previous := s.tm.target
-	if target != nil && previous != nil && previous.MountID == target.MountID &&
-		previous.Inode == target.Inode && !force && s.smb.Running() {
-		_ = target.Close()
-		s.tm.diskError = ""
-		if volume.Free == 0 && !cfg.TimeMachine.ReadOnly {
-			s.tm.diskError = "USB volume has no free space"
-		}
+	s.tm.diskErrors = statuses
+	if !force && next.same(s.tm.bindings) && s.smb.Running() {
+		next.close(false)
 		s.updateBonjour(ctx)
 		return nil
 	}
-	if target != nil {
-		if !samba.HasAccount(ctx, cfg.Paths.SambaConf, cfg.TimeMachine.User) {
-			err = errors.New("Time Machine SMB account is unavailable")
-		} else if identity, accountErr := samba.UnixIdentity(ctx, cfg.TimeMachine.User); accountErr != nil {
-			err = accountErr
-		} else {
-			err = target.Probe(ctx, identity, cfg.TimeMachine.ReadOnly)
-		}
-		if err != nil {
-			_ = target.Close()
-			target = nil
-		}
-	}
-	s.tm.diskError = ""
-	if err != nil {
-		s.tm.diskError = err.Error()
-	}
-	if target == nil && previous == nil && !force && s.smb.Running() {
-		return nil
-	}
-	path := ""
-	if target != nil {
-		path = tmPath(&cfg)
-	}
-	if err := samba.ValidateCandidate(ctx, &cfg, path); err != nil {
-		if target != nil {
-			_ = target.Close()
-		}
-		return s.withdrawTimeMachine(err)
-	}
+	previous := s.tm.bindings
 	if err := s.smb.StopInstalled(&cfg); err != nil {
-		if target != nil {
-			_ = target.Close()
-		}
+		next.close(false)
 		return err
 	}
 	s.clearBonjour()
-	if previous != nil {
-		_ = previous.Close()
+	if err := removeLegacyDiskLinks(cfg.SMB.SharePath); err != nil {
+		next.close(false)
+		return err
 	}
-	s.tm.target = nil
-	if err := s.switchTarget(&cfg, target); err != nil {
-		if target != nil {
-			_ = target.Close()
+	if err := s.switchBindings(&cfg, next); err != nil {
+		next.close(false)
+		// A disconnected disk must never be reattached from an old descriptor.
+		if detachErr := s.stopDiskBindings(&cfg); detachErr != nil {
+			return errors.Join(err, detachErr)
 		}
-		s.tm.diskError = err.Error()
-		return errors.Join(err, s.installSamba(ctx, &cfg, nil, true, syncUsers))
+		return errors.Join(err, s.installation(ctx, &cfg, nil, syncUsers))
 	}
-	if err := s.installSamba(ctx, &cfg, target, true, syncUsers); err != nil {
-		if target != nil {
-			_ = target.Close()
-		}
-		s.tm.diskError = err.Error()
+	previous.close(false)
+	s.tm.bindings = next
+	if err := s.installation(ctx, &cfg, next, syncUsers); err != nil {
 		if stopErr := s.smb.StopInstalled(&cfg); stopErr != nil {
 			return errors.Join(err, stopErr)
 		}
-		if detachErr := s.switchTarget(&cfg, nil); detachErr != nil {
+		if detachErr := s.stopDiskBindings(&cfg); detachErr != nil {
 			return errors.Join(err, detachErr)
 		}
-		return errors.Join(err, s.installSamba(ctx, &cfg, nil, true, false))
+		return errors.Join(err, s.installation(ctx, &cfg, nil, false))
 	}
-	s.tm.target = target
 	s.updateBonjour(ctx)
 	return nil
 }
 
-func (s *Server) withdrawTimeMachine(cause error) error {
-	s.clearBonjour()
-	s.tm.diskError = cause.Error()
-	if err := s.smb.Stop(); err != nil {
-		return errors.Join(cause, err)
-	}
-	if s.tm.target != nil {
-		_ = s.tm.target.Close()
-		s.tm.target = nil
-	}
-	return errors.Join(cause, timemachine.Detach(tmPath(s.cfg)))
-}
-
 func (s *Server) recoverTimeMachine() error {
 	cfg := s.cfg.Snapshot()
-	journal := filepath.Join(tmDir(&cfg), "transaction", "pending")
-	if _, err := os.Stat(journal); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
+	dir := tmDir(&cfg)
+	data, err := os.ReadFile(filepath.Join(dir, "mounts.json"))
+	if err == nil {
+		if err := json.Unmarshal(data, &s.tm.mounts); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	_, err = os.Stat(filepath.Join(dir, "transaction", "pending"))
+	pending := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	legacyMount := false
+	if cfg.TimeMachine != nil {
+		legacyMount, err = timemachine.IsMount(tmPath(&cfg))
+		if err != nil {
+			return err
+		}
+	}
+	if len(s.tm.mounts) != 0 || pending || legacyMount {
+		if err := s.smb.StopInstalled(&cfg); err != nil {
+			return err
+		}
+		if err := s.stopDiskBindings(&cfg); err != nil {
+			return err
+		}
+	}
+	if legacyMount || pending {
+		if err := timemachine.Detach(tmPath(&cfg)); err != nil {
+			return err
+		}
+	}
+	if !pending {
+		return nil
 	}
 	tx, err := tmTransaction(&cfg)
 	if err != nil {
 		return err
 	}
-	if err := s.smb.StopInstalled(&cfg); err != nil {
-		return err
-	}
-	if err := timemachine.Detach(tmPath(&cfg)); err != nil {
-		return err
-	}
 	if err := tx.Restore(); err != nil {
 		return err
 	}
-	ownerCtx, cancelOwner := context.WithTimeout(s.ctx, 15*time.Minute)
+	ownerCtx, cancel := context.WithTimeout(s.ctx, 15*time.Minute)
 	ownerErr := applyTimeMachineOwnership(ownerCtx, &cfg, nil, true)
-	cancelOwner()
+	cancel()
 	if ownerErr != nil {
-		s.tm.ownershipRecovery = true
 		return ownerErr
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-	defer cancel()
+	ctx, stop := context.WithTimeout(s.ctx, 5*time.Second)
+	defer stop()
 	if err := rollbackAccount(ctx, tx); err != nil {
 		return err
 	}
@@ -447,7 +390,6 @@ func (s *Server) recoverTimeMachine() error {
 		return err
 	}
 	_ = os.Remove(tmOwnershipPath(&cfg))
-	s.tm.ownershipRecovery = false
 	return nil
 }
 

@@ -14,13 +14,12 @@ document.addEventListener('click', (event) => {
 // live, "Применить" only where settings are written to smb.conf.
 const TOOLBAR = {
   refresh: ['overview', 'shares', 'users', 'stats'],
-  apply: ['smb', 'shares', 'settings'],
+  apply: ['shares', 'settings'],
 };
 
 const VIEW_TITLES = {
   overview: 'Обзор', smb: 'SMB-сервер', shares: 'Общие диски', users: 'Пользователи',
   acl: 'Доступ к папкам', stats: 'Статистика', logs: 'Логи', settings: 'Настройки',
-  timemachine: 'Time Machine',
 };
 
 async function api(path, opts = {}) {
@@ -78,6 +77,8 @@ async function doLogin(ev) {
 }
 
 function show(view) {
+  const backupLink = view === 'timemachine';
+  if (backupLink) view = 'smb';
   if (!VIEW_TITLES[view]) view = 'overview';
   state.view = view;
   if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
@@ -87,7 +88,10 @@ function show(view) {
   updateToolbar(view);
   if (view === 'logs') loadLogs();
   if (view === 'acl') loadAcl();
-  if (view === 'timemachine') loadTimeMachine();
+  if (view === 'smb') {
+    loadLocalDisks();
+    if (backupLink) $('smb-disks').scrollIntoView();
+  }
   if (view === 'settings' || view === 'smb' || view === 'shares' || view === 'users') fillForms();
   if (view !== 'logs' && view !== 'acl') refresh();
   refreshI18nSoon();
@@ -110,7 +114,7 @@ function setAutoRefresh(on) {
 
 function currentView() {
   const v = (location.hash || '').replace('#', '');
-  return VIEW_TITLES[v] ? v : 'overview';
+  return v === 'timemachine' || VIEW_TITLES[v] ? v : 'overview';
 }
 
 
@@ -479,7 +483,7 @@ async function startApp() {
   }
   window.addEventListener('hashchange', () => {
     const v = (location.hash || '').replace('#', '');
-    if (v && v !== state.view && VIEW_TITLES[v]) show(v);
+    if (v && v !== state.view && (v === 'timemachine' || VIEW_TITLES[v])) show(v);
   });
   $('remote-add').onclick = () => $('remotes').appendChild(rowRemote());
   $('user-add').onclick = () => $('users').appendChild(rowUser());

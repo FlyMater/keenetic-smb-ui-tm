@@ -21,7 +21,6 @@ import (
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/samba"
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/shares"
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/stats"
-	"github.com/FlyMater/keenetic-smb-ui-tm/internal/timemachine"
 )
 
 //go:embed assets
@@ -82,6 +81,7 @@ func New(cfg *config.Config) (*Server, error) {
 	mux.HandleFunc("/api/ndms/users", s.auth(s.handleNDMSUsers))
 	mux.HandleFunc("/api/logs", s.auth(s.handleLogs))
 	mux.HandleFunc("/api/update", s.auth(s.handleUpdate))
+	mux.HandleFunc("/api/local-disks", s.auth(s.handleLocalDisks))
 	mux.HandleFunc("/api/time-machine", s.auth(s.handleTimeMachine))
 	mux.HandleFunc("/api/time-machine/", s.auth(s.handleTimeMachine))
 
@@ -127,11 +127,7 @@ func (s *Server) Shutdown(d time.Duration) error {
 	if stopErr := s.smb.Stop(); stopErr != nil {
 		return errors.Join(err, stopErr)
 	}
-	if s.tm.target != nil {
-		_ = s.tm.target.Close()
-		s.tm.target = nil
-	}
-	return errors.Join(err, timemachine.Detach(tmPath(s.cfg)))
+	return errors.Join(err, s.stopDiskBindings(s.cfg))
 }
 
 // Bootstrap brings the managed stack up after start: IP alias, smb.conf,
@@ -177,7 +173,7 @@ func (s *Server) Bootstrap() {
 				return
 			case <-ticker.C:
 				s.operations.Lock()
-				if s.tm.ownershipRecovery {
+				if s.tm.recoveryError != "" {
 					if err := s.recoverTimeMachine(); err != nil {
 						s.tm.recoveryError = err.Error()
 					} else {
@@ -264,7 +260,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			if incoming.Paths.SambaPidDir == "" {
 				incoming.Paths.SambaPidDir = c.Paths.SambaPidDir
 			}
-			incoming.TimeMachine = c.TimeMachine
+			incoming.TimeMachine, incoming.LocalDisks = c.TimeMachine, c.LocalDisks
 			incoming.SMB.AggregateDisabled = c.SMB.AggregateDisabled
 			if tmEnabled(c) {
 				if incoming.Paths != c.Paths || incoming.SMB.ListenIP != c.SMB.ListenIP ||
@@ -272,12 +268,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 					return errors.New("disable Time Machine before changing the Samba listen address or runtime paths")
 				}
 				if err := validateTimeMachineUserChange(&incoming); err != nil {
-					return err
-				}
-				if err := samba.ValidateTimeMachine(&incoming, tmPath(&incoming)); err != nil {
-					return err
-				}
-				if err := validateTimeMachineAggregate(&incoming); err != nil {
 					return err
 				}
 			}
@@ -295,12 +285,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if c.TimeMachine != nil && !c.TimeMachine.SMBUser {
-				for _, user := range incoming.SMB.Users {
-					if strings.EqualFold(user.Name, c.TimeMachine.User) {
-						return errors.New("account is reserved for Time Machine")
-					}
+			for _, user := range incoming.SMB.Users {
+				if reservedTimeMachineUser(c, user.Name) {
+					return errors.New("account is reserved for Time Machine")
 				}
+			}
+			if err := s.validateDiskLayout(&incoming); err != nil {
+				return err
 			}
 			*c = incoming
 			return nil
@@ -354,11 +345,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRawConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	target := ""
-	if s.tm.target != nil {
-		target = tmPath(s.cfg)
-	}
-	if _, err := w.Write([]byte(samba.RenderWithTimeMachine(s.cfg, target))); err != nil {
+	targets, local := s.diskShares(s.cfg, s.tm.bindings)
+	if _, err := w.Write([]byte(samba.RenderDisks(s.cfg, targets, local))); err != nil {
 		log.Printf("raw config write: %v", err)
 	}
 }
@@ -389,11 +377,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		s.clearBonjour()
 		err = s.smb.Stop()
 		if err == nil {
-			if s.tm.target != nil {
-				_ = s.tm.target.Close()
-				s.tm.target = nil
-			}
-			err = timemachine.Detach(tmPath(s.cfg))
+			err = s.stopDiskBindings(s.cfg)
 		}
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
@@ -434,7 +418,7 @@ func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
 			payload.Remotes[i].Name = strings.TrimSpace(payload.Remotes[i].Name)
 		}
 		c.Remotes = payload.Remotes
-		return nil
+		return s.validateDiskLayout(c)
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -485,7 +469,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			old[u.Name] = u.Password
 		}
 		for i := range users {
-			if c.TimeMachine != nil && !c.TimeMachine.SMBUser && strings.EqualFold(users[i].Name, c.TimeMachine.User) {
+			if reservedTimeMachineUser(c, users[i].Name) {
 				return errors.New("account is reserved for Time Machine")
 			}
 			if users[i].Password == "" {
@@ -497,7 +481,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			if err := validateTimeMachineUserChange(c); err != nil {
 				return err
 			}
-			return samba.ValidateTimeMachine(c, tmPath(c))
+			return s.validateDiskLayout(c)
 		}
 		return nil
 	})

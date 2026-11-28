@@ -118,6 +118,16 @@ func TestBindAfterReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer Detach(bind)
+	other, err := OpenTarget(volume, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	otherBind := filepath.Join(t.TempDir(), "other")
+	if err := other.Bind(otherBind); err != nil {
+		t.Fatal(err)
+	}
+	defer Detach(otherBind)
 	read("original")
 	if err := os.Rename(source, source+"-detached"); err != nil {
 		t.Fatal(err)
@@ -129,6 +139,10 @@ func TestBindAfterReplacement(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(bind, "marker")); !os.IsNotExist(err) {
 		t.Fatalf("stale backup target remained accessible: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(otherBind, "backup-detached", "marker"))
+	if err != nil || string(got) != "original" {
+		t.Fatalf("detaching one destination affected another: %q, %v", got, err)
 	}
 	replacement, err := OpenTarget(volume, "backup", nil)
 	if err != nil {

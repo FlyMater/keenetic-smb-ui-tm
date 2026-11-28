@@ -39,15 +39,21 @@ func TestEntwareTimeMachine(t *testing.T) {
 	cfg := config.Default()
 	cfg.SMB.ListenIP, cfg.SMB.SharePath = ip, filepath.Join(dir, "all")
 	cfg.Paths.SambaPidDir, cfg.Paths.SambaConf = filepath.Join(dir, "run"), filepath.Join(dir, "smb.conf")
-	cfg.TimeMachine = &config.TimeMachine{Enabled: true, Share: "Mac Backup", User: user, LimitGiB: 5}
+	cfg.TimeMachine = &config.TimeMachine{Enabled: true, UUID: "test-volume", Share: "Mac Backup", User: user, LimitGiB: 5}
 	target := filepath.Join(dir, "volume")
-	for _, name := range []string{"all", "volume", "run", "private", "state", "cache", "lock", "rpc", "log"} {
+	second := filepath.Join(dir, "volume-other")
+	cfg.LocalDisks = []config.LocalDisk{{UUID: "test-other", TimeMachine: &config.TimeMachine{
+		Enabled: true, UUID: "test-other", Share: "Other Mac", User: user, LimitGiB: 10,
+	}}}
+	for _, name := range []string{"all", "volume", "volume-other", "run", "private", "state", "cache", "lock", "rpc", "log"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chown(target, int(id.UID), int(id.GID)); err != nil {
-		t.Fatal(err)
+	for _, path := range []string{target, second} {
+		if err := os.Chown(path, int(id.UID), int(id.GID)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	legacy := filepath.Join(target, "Backups.backupdb")
 	if err := os.Mkdir(legacy, 0755); err != nil {
@@ -56,7 +62,7 @@ func TestEntwareTimeMachine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(legacy, "original.txt"), []byte("legacy backup"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	content := RenderWithTimeMachine(cfg, target)
+	content := RenderDisks(cfg, map[string]string{"test-volume": target, "test-other": second}, nil)
 	content = strings.NewReplacer(
 		"/opt/etc/samba/private", filepath.Join(dir, "private"),
 		"/opt/var/keenetic-smb-ui/state", filepath.Join(dir, "state"),
@@ -104,6 +110,11 @@ func TestEntwareTimeMachine(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil || strings.Contains(strings.ToLower(string(out)), "backups.backupdb") {
 		t.Fatalf("legacy directory is visible or listing failed: %v: %s", err, out)
+	}
+	projection := *cfg
+	projection.TimeMachine = cfg.LocalDisks[0].TimeMachine
+	if err := CheckSMB(ctx, &projection, password); err != nil {
+		t.Fatalf("second Time Machine share is unavailable: %v", err)
 	}
 	cfg.TimeMachine.Share = cfg.SMB.ShareName
 	if err := CheckSMB(ctx, cfg, password); err == nil {

@@ -41,7 +41,7 @@ pid/state/private directories — the router's SMB keeps working exactly as befo
   (example: `10.30.0.2` on `br0`); the app assigns the `/32` alias itself. Address and
   interface are changed in **SMB server** settings.
 - **Aggregated share**: mount any number of remote SMB shares (Proxmox disks) and
-  local router USB disks into one tree exported as `\\IP\all`.
+  selected local router USB disks into one tree exported as `\\IP\all`.
 - **Per-disk switches**: add, edit, enable/disable and mark each remote read-only
   straight from the web UI.
 - **Router users**: import accounts from NDMS (`ndmc -c "show user"`) and enable them
@@ -129,10 +129,9 @@ internet access required.
 | Section | What it does |
 |---|---|
 | **Overview** | server state, share path, sessions, traffic, load/traffic charts, disk usage |
-| **SMB server** | IP, bridge, workgroup, server name, share name/path, ports, protocols, guest, read-only, `force user`, extra `smb.conf` lines, start/stop/restart, config preview |
+| **SMB server** | IP, bridge, workgroup, server name, share name/path, ports, protocols, guest, read-only, `force user`, extra `smb.conf` lines, start/stop/restart, config preview, USB disk selection and Time Machine targets |
 | **Disks** | remote shares CRUD, enable/disable, read-only flag, live mount status |
 | **Users** | SMB accounts, per-user password and read-only, one-click import from NDMS |
-| **Time Machine** | dedicated USB destination, SMB account, backup size limit, Bonjour and connection checks |
 | **Folder access** | «Files and folders» dialog: folder tree with sizes, create folder, per-user read/write/deny with inheritance |
 | **Statistics** | uptime, load, memory, network, SMB sessions, history chart |
 | **Logs** | tail of the managed `samba.log` |
@@ -190,8 +189,8 @@ Any SMB share reachable from the router can be mounted into the exported tree:
 | user / password | `admin` / `****` |
 | read only | off / on |
 
-The mount appears as `\\<smb-ip>\all\hddshare24tb-a`. Local router disks from
-`/tmp/mnt/*` are linked automatically as `local-<uuid>`.
+The mount appears as `\\<smb-ip>\all\hddshare24tb-a`. In **SMB server**, select the
+USB volumes to publish under the aggregate share as `local-…` directories.
 
 `subpath` mounts only a folder inside the share — the same idea as Proxmox's
 **Subdirectory** field for SMB/CIFS storage. Use it to publish, for example, only
@@ -223,7 +222,7 @@ Result on the router (`10.30.0.2` is the app's dedicated SMB address):
 ├── hddshare24tb-a   → //10.20.0.11/hddshare24tb-a
 ├── hdd24tb-b        → //10.20.0.12/hdd24tb-b
 ├── hddshare5tb-c    → //10.20.0.13/hddshare5tb-c
-└── local-<uuid>     → router USB disks
+└── local-<uuid>     → selected router USB disks
 ```
 
 Step-by-step instructions, the exact `smb.conf` snippet for the Proxmox side, mount
@@ -286,10 +285,11 @@ untouched.
 
 ## Time Machine
 
-Open **Time Machine** in the panel and select a USB volume and, optionally, a
-directory. Name the share and select an enabled SMB user from **Users**.
-For backups, choose an account with write access. Run **Check connection**,
-then **Apply**. Use the selected account's existing password in Finder.
+In **SMB server**, select **Publish over SMB** for a USB volume and enable
+**Time Machine** on its row. Several volumes can serve as backup destinations
+at once. For each volume, pick a backup directory if needed, name the share, and
+select an enabled SMB user with write access. Run **Check connection**, then
+**Apply disk selection**. Use the selected account's existing password in Finder.
 
 When the panel recognizes a manually configured Time Machine share, use
 **Migrate existing share** to review its address, account and backup directory.
@@ -298,8 +298,11 @@ sparsebundle and confirm the ownership change before applying.
 
 Select the share in macOS Time Machine. If Bonjour discovery is unavailable,
 connect in Finder using the SMB address shown in the panel's diagnostics.
-While Time Machine mode is enabled, local USB volumes are hidden from the
-aggregate share and its folder shares. Remote shares remain available.
+A volume can serve regular SMB and Time Machine at the same time. Access to the
+backup files through the aggregate share follows the regular SMB access settings.
+Disk choices follow volume UUIDs. When a volume disconnects its shares are
+withdrawn until it returns. Upgrades preserve a previously configured Time
+Machine target. Select the USB volumes you want in the aggregate share.
 
 ## Updates
 
