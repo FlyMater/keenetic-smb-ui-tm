@@ -545,10 +545,14 @@ async function startApp() {
     await api('/api/remotes', { method: 'POST', body: JSON.stringify({ remotes: collectRemotes() }) });
     state.cfg = null; fillForms(); refresh();
   };
-  $('users-save').onclick = async () => {
-    await api('/api/users', { method: 'POST', body: JSON.stringify(collectUsers()) });
-    state.cfg = null; fillForms(); refresh();
-  };
+  const usersSave = $('users-save');
+  usersSave.onclick = () => runButtonAction([usersSave], $('users-msg'), 'Сохраняю пользователей…', async () => {
+    const result = await api('/api/users', { method: 'POST', body: JSON.stringify(collectUsers()) });
+    state.cfg = null;
+    fillForms();
+    refresh();
+    $('users-msg').textContent = result.warning ? t(result.warning) : t('Пользователи сохранены.');
+  });
   const settingsSave = $('cfg-save');
   settingsSave.onclick = () => {
     if (!state.settingsReady) return;

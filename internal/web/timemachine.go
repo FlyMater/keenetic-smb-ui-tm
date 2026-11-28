@@ -18,20 +18,21 @@ import (
 )
 
 type timeMachineRuntime struct {
-	target        *timemachine.Target
-	bonjour       timemachine.Bonjour
-	diskError     string
-	bonjourError  string
-	advertised    bool
-	paused        bool
-	applyError    string
-	recoveryError string
+	target            *timemachine.Target
+	bonjour           timemachine.Bonjour
+	diskError         string
+	bonjourError      string
+	advertised        bool
+	paused            bool
+	applyError        string
+	recoveryError     string
+	ownershipRecovery bool
 }
 
 type timeMachineRequest struct {
 	config.TimeMachine
-	Password     string `json:"password"`
-	CreateFolder bool   `json:"create_folder"`
+	CreateFolder bool                  `json:"create_folder"`
+	Migration    *timeMachineMigration `json:"migration,omitempty"`
 }
 
 func tmEnabled(cfg *config.Config) bool {
@@ -85,7 +86,8 @@ func (s *Server) handleTimeMachine(w http.ResponseWriter, r *http.Request) {
 
 	switch path {
 	case "":
-		writeJSON(w, map[string]any{"profile": s.cfg.TimeMachine, "diagnostics": s.tmDiagnostics()})
+		writeJSON(w, map[string]any{"profile": s.cfg.TimeMachine, "diagnostics": s.tmDiagnostics(),
+			"users": timeMachineUsers(s.cfg), "legacy": s.timeMachineLegacyPreview(ctx)})
 	case "/volumes", "/folders":
 		volumes, err := timemachine.Volumes(ctx, tmPath(s.cfg))
 		if err != nil {
@@ -133,7 +135,11 @@ func (s *Server) handleTimeMachine(w http.ResponseWriter, r *http.Request) {
 			result, err = s.checkTimeMachine(ctx, request)
 		} else {
 			// Complete a started application even if the browser closes.
-			applyCtx, stop := context.WithTimeout(s.ctx, 45*time.Second)
+			timeout := 45 * time.Second
+			if request.Migration != nil {
+				timeout = 15 * time.Minute
+			}
+			applyCtx, stop := context.WithTimeout(s.ctx, timeout)
 			defer stop()
 			err = s.applyTimeMachine(applyCtx, request)
 			s.tm.applyError = ""
@@ -197,9 +203,6 @@ func (s *Server) tmDiagnostics() map[string]any {
 }
 
 func (s *Server) validateTimeMachine(ctx context.Context, next *config.Config, request timeMachineRequest) (timemachine.Volume, error) {
-	if err := samba.ValidatePassword(request.Password); err != nil {
-		return timemachine.Volume{}, err
-	}
 	if err := samba.ValidateTimeMachine(next, tmPath(next)); err != nil {
 		return timemachine.Volume{}, err
 	}
@@ -232,27 +235,73 @@ func selectVolume(ctx context.Context, cfg *config.Config) (timemachine.Volume, 
 	return volume, nil
 }
 
+type timeMachineUser struct {
+	Name     string `json:"name"`
+	ReadOnly bool   `json:"readonly"`
+}
+
+func timeMachineUsers(cfg *config.Config) []timeMachineUser {
+	users := make([]timeMachineUser, 0, len(cfg.SMB.Users))
+	for _, user := range cfg.SMB.Users {
+		if _, err := samba.TimeMachineSMBUser(cfg.SMB.Users, user.Name, true); err == nil {
+			users = append(users, timeMachineUser{user.Name, user.ReadOnly})
+		}
+	}
+	return users
+}
+
+var errTimeMachineUserInUse = errors.New("change the Time Machine user or disable Time Machine before removing this SMB access")
+
+func validateTimeMachineUserChange(cfg *config.Config) error {
+	if tmEnabled(cfg) && cfg.TimeMachine.SMBUser {
+		if _, err := samba.TimeMachineSMBUser(cfg.SMB.Users, cfg.TimeMachine.User, cfg.TimeMachine.ReadOnly); err != nil {
+			return errTimeMachineUserInUse
+		}
+	}
+	return nil
+}
+
+func timeMachineAccount(old *config.Config, profile *config.TimeMachine) (string, error) {
+	// Only a profile already on disk can retain its dedicated account.
+	profile.SMBUser = true
+	user, err := samba.TimeMachineSMBUser(old.SMB.Users, profile.User, profile.ReadOnly)
+	if err == nil {
+		profile.User = user.Name
+		return user.Password, nil
+	}
+	if old.TimeMachine != nil && !old.TimeMachine.SMBUser && old.TimeMachine.User != "" &&
+		strings.EqualFold(old.TimeMachine.User, profile.User) {
+		profile.User, profile.SMBUser = old.TimeMachine.User, false
+		return "", nil
+	}
+	return "", err
+}
+
 func (s *Server) checkTimeMachine(ctx context.Context, request timeMachineRequest) (string, error) {
 	if !request.Enabled {
 		return "", errors.New("enable Time Machine to check the destination")
 	}
+	old := s.cfg.Snapshot()
 	next := s.cfg.Snapshot()
+	if _, err := s.prepareTimeMachineMigration(ctx, &old, &next, &request); err != nil {
+		return "", err
+	}
 	next.TimeMachine = &request.TimeMachine
+	password, err := timeMachineAccount(&old, next.TimeMachine)
+	if err != nil {
+		return "", err
+	}
 	volume, err := s.validateTimeMachine(ctx, &next, request)
 	if err != nil {
 		return "", err
 	}
-	profile := s.cfg.TimeMachine
-	sameUser := profile != nil && profile.User == request.User
-	if !sameUser && samba.UnixExists(ctx, request.User) {
-		return "", errors.New("Unix account name is already in use")
-	}
-	if !sameUser && request.Password == "" {
-		return "", errors.New("enter a password for the new Time Machine account")
+	identity, err := existingTimeMachineIdentity(ctx, &next)
+	if err != nil {
+		return "", err
 	}
 	target, err := timemachine.OpenTarget(volume, request.Folder, nil)
-	if err != nil && request.CreateFolder && errors.Is(err, os.ErrNotExist) && request.Folder != "" {
-		parent := filepath.ToSlash(filepath.Dir(request.Folder))
+	if errors.Is(err, os.ErrNotExist) && request.CreateFolder && request.Folder != "" {
+		parent := filepath.Dir(request.Folder)
 		if parent == "." {
 			parent = ""
 		}
@@ -265,20 +314,31 @@ func (s *Server) checkTimeMachine(ctx context.Context, request timeMachineReques
 	if err := samba.ValidateCandidate(ctx, &next, tmPath(&next)); err != nil {
 		return "", err
 	}
-	if profile != nil && *profile == request.TimeMachine && s.tm.target != nil && s.smb.Running() && request.Password != "" {
-		return "connected", samba.CheckSMB(ctx, &next, request.Password)
-	}
-	if sameUser {
-		id, err := samba.UnixIdentity(ctx, request.User)
-		if err != nil {
-			return "", err
+	if err := target.Probe(ctx, identity, request.ReadOnly); err != nil {
+		if request.Migration != nil && request.Migration.ChangeOwner {
+			return "ownership_pending", nil
 		}
-		if !request.CreateFolder {
-			if err := target.Probe(ctx, id, request.ReadOnly); err != nil {
-				return "", err
-			}
-			return "preflight", nil
+		if request.Migration != nil && !request.ReadOnly {
+			return "", errOwnershipRequired
 		}
+		return "", err
 	}
-	return "preflight_pending_account_or_folder", nil
+	if request.Migration != nil && request.Migration.ChangeOwner {
+		return "ownership_pending", nil
+	}
+	if old.TimeMachine != nil && *old.TimeMachine == request.TimeMachine && s.tm.target != nil && s.smb.Running() {
+		if password == "" || samba.ValidatePassword(password) != nil {
+			return "check_in_finder", nil
+		}
+		return "connected", samba.CheckSMB(ctx, &next, password)
+	}
+	return "preflight", nil
+}
+
+func existingTimeMachineIdentity(ctx context.Context, cfg *config.Config) (timemachine.Identity, error) {
+	name := cfg.TimeMachine.User
+	if !samba.HasAccount(ctx, cfg.Paths.SambaConf, name) {
+		return timemachine.Identity{}, errors.New("Time Machine SMB account is unavailable")
+	}
+	return samba.UnixIdentity(ctx, name)
 }

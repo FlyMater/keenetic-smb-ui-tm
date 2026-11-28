@@ -57,6 +57,10 @@ func (s *Server) installSamba(ctx context.Context, cfg *config.Config, target *t
 func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineRequest) (result error) {
 	old := s.cfg.Snapshot()
 	next := s.cfg.Snapshot()
+	migration, err := s.prepareTimeMachineMigration(ctx, &old, &next, &request)
+	if err != nil {
+		return err
+	}
 	p := &request.TimeMachine
 	if !p.Enabled {
 		if old.TimeMachine == nil || !old.TimeMachine.Enabled {
@@ -68,28 +72,21 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 	}
 	next.TimeMachine = p
 	var volume timemachine.Volume
+	var identity timemachine.Identity
+	var password string
 	if p.Enabled {
-		var err error
+		password, err = timeMachineAccount(&old, p)
+		if err != nil {
+			return err
+		}
 		volume, err = s.validateTimeMachine(ctx, &next, request)
 		if err != nil {
 			return err
 		}
-	}
-	oldUser := ""
-	if old.TimeMachine != nil {
-		oldUser = old.TimeMachine.User
-	}
-	newAccount := p.Enabled && p.User != oldUser
-	if newAccount && (request.Password == "" || samba.UnixExists(ctx, p.User)) {
-		return errors.New("a new Time Machine account requires an unused Unix name and a password")
-	}
-	if p.Enabled && p.User == oldUser && request.Password == "" &&
-		!samba.HasAccount(ctx, old.Paths.SambaConf, p.User) {
-		return errors.New("enter a password to restore the Time Machine SMB account")
-	}
-	if !p.Enabled && oldUser != "" {
-		// Keep the inactive profile so re-enabling it can reuse its account.
-		p.User = oldUser
+		identity, err = existingTimeMachineIdentity(ctx, &next)
+		if err != nil {
+			return err
+		}
 	}
 	path := ""
 	if p.Enabled {
@@ -102,13 +99,18 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 	if err != nil {
 		return err
 	}
+	if !tx.Pending() {
+		if err := os.Remove(tmOwnershipPath(&old)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	if err := tx.Prepare(); err != nil {
 		return err
 	}
 	previousTarget := s.tm.target
 	wasRunning := s.smb.Running()
 	var target *timemachine.Target
-	var stopAttempted, bindingChanged, startAttempted bool
+	var stopAttempted, bindingChanged, startAttempted, ownerChangeStarted bool
 	defer func() {
 		if result == nil {
 			if target != nil {
@@ -119,8 +121,6 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 			}
 			return
 		}
-		rollback, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
 		if target != nil {
 			defer target.Close()
 		}
@@ -131,7 +131,13 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 				return
 			}
 		}
-		var bindErr, restoreErr, startErr error
+		var bindErr, restoreErr, startErr, ownerErr error
+		if ownerChangeStarted {
+			ownerCtx, cancelOwner := context.WithTimeout(context.Background(), 15*time.Minute)
+			ownerErr = applyTimeMachineOwnership(ownerCtx, &old, target, true)
+			cancelOwner()
+			s.tm.ownershipRecovery = ownerErr != nil
+		}
 		if bindingChanged {
 			bindErr = s.switchTarget(&old, previousTarget)
 			restoreErr = tx.Restore()
@@ -141,18 +147,23 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 		if target != nil {
 			folderErr = target.RemoveCreatedFolder()
 		}
-		if stopAttempted && wasRunning && restoreErr == nil && (bindErr == nil || previousTarget == nil) {
+		rollback, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if stopAttempted && wasRunning && restoreErr == nil && ownerErr == nil && (bindErr == nil || previousTarget == nil) {
 			startErr = s.smb.StartInstalled(rollback, &old)
 		}
 		accountCtx, cancelAccount := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelAccount()
 		userErr := rollbackAccount(accountCtx, tx)
 		var completeErr error
-		if bindErr == nil && restoreErr == nil && startErr == nil && userErr == nil {
+		if bindErr == nil && restoreErr == nil && startErr == nil && userErr == nil && ownerErr == nil {
 			completeErr = tx.Complete()
+			if completeErr == nil {
+				_ = os.Remove(tmOwnershipPath(&old))
+			}
 		}
-		result = errors.Join(result, bindErr, restoreErr, startErr, folderErr, userErr, completeErr)
-		if bindErr != nil || restoreErr != nil || startErr != nil || userErr != nil || completeErr != nil {
+		result = errors.Join(result, bindErr, restoreErr, startErr, folderErr, userErr, ownerErr, completeErr)
+		if bindErr != nil || restoreErr != nil || startErr != nil || userErr != nil || ownerErr != nil || completeErr != nil {
 			s.tm.recoveryError = result.Error()
 		}
 		if stopAttempted {
@@ -160,18 +171,6 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 		}
 	}()
 	if p.Enabled {
-		if newAccount {
-			if err := tx.RecordNewAccount(p.User); err != nil {
-				return err
-			}
-			if err := samba.CreateUnix(ctx, p.User); err != nil {
-				return fmt.Errorf("cannot create Time Machine Unix account: %w", err)
-			}
-		}
-		identity, err := samba.UnixIdentity(ctx, p.User)
-		if err != nil {
-			return err
-		}
 		var create *timemachine.Identity
 		if request.CreateFolder && p.Folder != "" {
 			create = &identity
@@ -180,7 +179,14 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 		if err != nil {
 			return err
 		}
-		if err := target.Probe(ctx, identity, p.ReadOnly); err != nil {
+		if migration != nil && request.Migration.ChangeOwner {
+			if err := target.CheckOwnershipSupport(identity); err != nil {
+				return err
+			}
+		} else if err := target.Probe(ctx, identity, p.ReadOnly); err != nil {
+			if migration != nil && !p.ReadOnly {
+				return errOwnershipRequired
+			}
 			return err
 		}
 	}
@@ -192,22 +198,24 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 	if err := tx.Capture(); err != nil {
 		return err
 	}
+	if migration != nil && request.Migration.ChangeOwner {
+		if err := saveTimeMachineOwnership(ctx, &next, target, identity, request.Migration.Bundle); err != nil {
+			return err
+		}
+		ownerChangeStarted = true
+		if err := applyTimeMachineOwnership(ctx, &next, target, false); err != nil {
+			return err
+		}
+		if err := target.Probe(ctx, identity, p.ReadOnly); err != nil {
+			return err
+		}
+	}
 	bindingChanged = true
 	if err := s.switchTarget(&next, target); err != nil {
 		return err
 	}
 	if err := s.installSamba(ctx, &next, target, false, false); err != nil {
 		return err
-	}
-	if p.Enabled && request.Password != "" {
-		if err := samba.SetPassword(ctx, next.Paths.SambaConf, p.User, request.Password); err != nil {
-			return err
-		}
-	}
-	if newAccount && oldUser != "" {
-		if err := samba.DeletePassword(ctx, next.Paths.SambaConf, oldUser); err != nil {
-			return err
-		}
 	}
 	if next.SMB.Enabled && !s.tm.paused {
 		if p.Enabled {
@@ -223,8 +231,8 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 			if err := samba.CheckListener(ctx, next.SMB.ListenIP); err != nil {
 				return err
 			}
-			if request.Password != "" {
-				if err := samba.CheckSMB(ctx, &next, request.Password); err != nil {
+			if password != "" && samba.ValidatePassword(password) == nil {
+				if err := samba.CheckSMB(ctx, &next, password); err != nil {
 					return err
 				}
 			}
@@ -232,13 +240,23 @@ func (s *Server) applyTimeMachine(ctx context.Context, request timeMachineReques
 	}
 	if err := s.cfg.Update(func(cfg *config.Config) error {
 		cfg.TimeMachine = p
+		if migration != nil {
+			cfg.SMB.ExtraOptions = next.SMB.ExtraOptions
+			cfg.SMB.AggregateDisabled = next.SMB.AggregateDisabled
+		}
 		return nil
 	}); err != nil {
 		return err
 	}
+	if migration != nil {
+		if err := syncMigrationConfig(&next); err != nil {
+			return err
+		}
+	}
 	if err := tx.Complete(); err != nil {
 		return err
 	}
+	_ = os.Remove(tmOwnershipPath(&old))
 	s.tm.target, s.tm.diskError = target, ""
 	s.updateBonjour(ctx)
 	return nil
@@ -407,6 +425,13 @@ func (s *Server) recoverTimeMachine() error {
 	if err := tx.Restore(); err != nil {
 		return err
 	}
+	ownerCtx, cancelOwner := context.WithTimeout(s.ctx, 15*time.Minute)
+	ownerErr := applyTimeMachineOwnership(ownerCtx, &cfg, nil, true)
+	cancelOwner()
+	if ownerErr != nil {
+		s.tm.ownershipRecovery = true
+		return ownerErr
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	if err := rollbackAccount(ctx, tx); err != nil {
@@ -418,7 +443,12 @@ func (s *Server) recoverTimeMachine() error {
 	}
 	restored.Paths.DataDir = cfg.Paths.DataDir
 	s.cfg.Replace(*restored)
-	return tx.Complete()
+	if err := tx.Complete(); err != nil {
+		return err
+	}
+	_ = os.Remove(tmOwnershipPath(&cfg))
+	s.tm.ownershipRecovery = false
+	return nil
 }
 
 func rollbackAccount(ctx context.Context, tx *samba.Transaction) error {

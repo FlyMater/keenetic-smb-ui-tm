@@ -287,8 +287,14 @@ untouched.
 ## Time Machine
 
 Open **Time Machine** in the panel and select a USB volume and, optionally, a
-directory. Set the SMB share name, a dedicated username and password, and an
-optional backup size limit. Run **Check connection**, then **Apply**.
+directory. Name the share and select an enabled SMB user from **Users**.
+For backups, choose an account with write access. Run **Check connection**,
+then **Apply**. Use the selected account's existing password in Finder.
+
+When the panel recognizes a manually configured Time Machine share, use
+**Migrate existing share** to review its address, account and backup directory.
+If the selected user needs ownership of an existing backup, choose its
+sparsebundle and confirm the ownership change before applying.
 
 Select the share in macOS Time Machine. If Bonjour discovery is unavailable,
 connect in Finder using the SMB address shown in the panel's diagnostics.
