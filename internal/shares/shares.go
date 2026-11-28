@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
 )
 
 // Manager reconciles configured remotes with the running mounts.

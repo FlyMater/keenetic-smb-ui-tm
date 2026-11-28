@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
-	"github.com/tommilevs/keenetic-smb-ui/internal/timemachine"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/timemachine"
 )
 
 const PassDB = "/opt/etc/samba/private/passdb.tdb"

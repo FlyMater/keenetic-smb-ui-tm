@@ -53,8 +53,11 @@ log in, walk every section, and check the mobile width (≤ 820 px).
 
 1. `git tag vX.Y.Z && git push origin vX.Y.Z` (or bump the version in the build).
 2. Build binaries and packages: `make build && bash scripts/build-ipk.sh X.Y.Z`.
-3. Publish a GitHub release with all `dist/*.ipk`, `Packages`, `Packages.gz`.
-4. The panel's self-update picks the release up automatically.
+3. Publish a [GitHub release](https://github.com/FlyMater/keenetic-smb-ui-tm/releases)
+   with the built `.ipk` packages. For an opkg feed, also include `Packages`,
+   `Packages.gz` and the packages listed in the index.
+4. The panel offers the update when the release includes a package for the
+   router's architecture.
 
 ## Reporting bugs
 

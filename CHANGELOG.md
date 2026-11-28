@@ -1,8 +1,7 @@
 # Changelog
 
-All notable changes are documented here. Versions follow `MAJOR.MINOR.PATCH`;
-every release publishes `.ipk` packages for all supported Entware architectures plus
-`Packages` / `Packages.gz` for use as an opkg feed.
+All notable changes are documented here. Versions follow `MAJOR.MINOR.PATCH`. Check [GitHub Releases](https://github.com/FlyMater/keenetic-smb-ui-tm/releases)
+for the `.ipk` packages available for each release.
 
 ## 1.7.0 — английский интерфейс, ссылки и аккуратный тумблер
 

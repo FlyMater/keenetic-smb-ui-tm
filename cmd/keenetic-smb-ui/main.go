@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
-	"github.com/tommilevs/keenetic-smb-ui/internal/timemachine"
-	"github.com/tommilevs/keenetic-smb-ui/internal/web"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/timemachine"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/web"
 )
 
 var version = web.Version
@@ -34,6 +34,11 @@ func main() {
 		dataDir = flag.String("data", "/opt/var/keenetic-smb-ui", "state directory")
 		showVer = flag.Bool("version", false, "print version and exit")
 	)
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+		fmt.Fprintln(flag.CommandLine.Output(), "Based on keenetic-smb-ui by tommilevs: https://github.com/tommilevs/keenetic-smb-ui")
+	}
 	flag.Parse()
 
 	if *showVer {

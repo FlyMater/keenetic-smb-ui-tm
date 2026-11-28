@@ -6,9 +6,9 @@
 
 [English](README.md) · **Русский**
 
-[Обзор](#зачем) · [Возможности](#возможности) · [Установка](#установка) · [Панель](#веб-панель) · [Диски](#агрегированные-диски) · [Пример Proxmox](#как-подключены-диски-нескольких-хостов-proxmox-пример) · [Права на папки](#права-на-папки) · [Пользователи](#пользователи) · [Обновления](#обновления) · [Конфигурация](#конфигурация) · [Релизы](../../releases) · [Issues](../../issues)
+[Обзор](#зачем) · [Возможности](#возможности) · [Установка](#установка) · [Панель](#веб-панель) · [Диски](#агрегированные-диски) · [Пример Proxmox](#как-подключены-диски-нескольких-хостов-proxmox-пример) · [Права на папки](#права-на-папки) · [Пользователи](#пользователи) · [Time Machine](#time-machine) · [Обновления](#обновления) · [Конфигурация](#конфигурация) · [Релизы](https://github.com/FlyMater/keenetic-smb-ui-tm/releases) · [Issues](https://github.com/FlyMater/keenetic-smb-ui-tm/issues)
 
-[![release](https://img.shields.io/github/v/release/tommilevs/keenetic-smb-ui?style=flat-square&label=release&color=4ea1ff)](../../releases)
+[![release](https://img.shields.io/github/v/release/FlyMater/keenetic-smb-ui-tm?style=flat-square&label=release&color=4ea1ff)](https://github.com/FlyMater/keenetic-smb-ui-tm/releases)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-3ddc97?style=flat-square)](LICENSE)
 [![go](https://img.shields.io/badge/go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![platform](https://img.shields.io/badge/platform-Keenetic%20%2F%20Entware-7b5cff?style=flat-square)](https://entware.net)
@@ -16,6 +16,8 @@
 [![opkg](https://img.shields.io/badge/package-.ipk-ff6b6b?style=flat-square)](#установка)
 
 </div>
+
+Проект поддерживается в репозитории [FlyMater/keenetic-smb-ui-tm](https://github.com/FlyMater/keenetic-smb-ui-tm).
 
 ## Зачем
 
@@ -83,37 +85,29 @@ pid/state/private каталоги — SMB роутера продолжает �
 
 ## Установка
 
-```sh
-# один раз добавляем наш фид
-echo "src/gz keenetic-smb-ui https://github.com/tommilevs/keenetic-smb-ui/releases/latest/download" \
-  >> /opt/etc/opkg.conf
-
-# ставим — фид несёт и приложение, и все зависимости Samba
-opkg update
-opkg install keenetic-smb-ui
-```
-
-В релизе лежат `samba4-server`, `samba4-client` и весь набор зависимостей
-(`samba4-libs`, `libgnutls`, `libopenssl`, `icu`, `libpam`, `libtirpc`, …) для
-`aarch64-3.10`, `armv7-3.2`, `mipsel-3.4` и `mips-3.4`. `opkg` берёт всё по одной
-ссылке, поэтому установка пройдёт, даже если Entware-фид когда-нибудь потеряет эти
-пакеты.
-
-<details>
-<summary><b>Ручная установка без фида</b></summary>
+Откройте [GitHub Releases](https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest) и выберите `.ipk`
+под свою архитектуру Entware (`opkg print-architecture`). Ниже приведён пример
+для ARM64. В `VERSION` укажите версию выбранного релиза без префикса `v`.
 
 ```sh
 opkg update
-opkg install samba4-server samba4-client
+opkg install samba4-server samba4-client blkid
 
-# busybox wget на Keenetic без TLS — используем curl
-curl -fsSL -O https://github.com/tommilevs/keenetic-smb-ui/releases/latest/download/keenetic-smb-ui_1.5.0_aarch64-3.10.ipk
-opkg install ./keenetic-smb-ui_1.5.0_aarch64-3.10.ipk
+VERSION=1.8.3
+PACKAGE=keenetic-smb-ui_${VERSION}_aarch64-3.10.ipk
+curl -fsSLO "https://github.com/FlyMater/keenetic-smb-ui-tm/releases/download/v${VERSION}/$PACKAGE" &&
+  opkg install "./$PACKAGE"
 
 /opt/etc/init.d/S99keenetic-smb-ui status
 ```
 
-</details>
+Если раньше добавляли фид `keenetic-smb-ui`, удалите его строку из
+`/opt/etc/opkg.conf`. Строку ниже можно добавить, если к последнему релизу
+приложены `Packages.gz` и соответствующие `.ipk`-пакеты.
+
+```text
+src/gz keenetic-smb-ui https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest/download
+```
 
 <details>
 <summary><b>Сборка из исходников</b></summary>
@@ -121,7 +115,7 @@ opkg install ./keenetic-smb-ui_1.5.0_aarch64-3.10.ipk
 ```sh
 make tidy vet test build   # dist/keenetic-smb-ui_linux_<arch>
 make ipk                   # dist/*.ipk для всех архитектур Entware
-make ipk ARCH=arm64 VERSION=1.8.0
+make ipk ARCH=arm64 VERSION=1.8.3
 ```
 
 Нужен Go 1.23+ и `CGO_ENABLED=0`. Упаковка использует только `tar` и `gzip` —
@@ -293,15 +287,79 @@ SMB-шарой со своим списком пользователей.
 
 Пароли записываются через `smbpasswd`, хранилище паролей роутера не трогается.
 
+## Time Machine
+
+Для Cudy WBR3000UAX с Keenetic Ported 5.01.C.10.0-0 мастер проверялся
+с Samba 4.24.5 из Entware. Панель назначает Samba отдельный IPv4-адрес `/32` на
+LAN-интерфейсе. В настройках Entware Samba должен быть доступен TCP 445.
+
+1. Откройте в панели раздел «Time Machine» и выберите USB-том. Пустое поле
+   каталога означает корень тома. Чтобы мастер создал каталог с правами
+   выделенного пользователя, укажите имя и включите «Создать каталог при
+   применении». Для существующего каталога права проверяются под выделенным
+   пользователем. Мастер не меняет владельцев и права существующих каталогов.
+2. Задайте имя ресурса, свободное имя Unix-пользователя и пароль. Для резервных
+   копий оставьте запись включённой. Укажите лимит в ГиБ или оставьте ноль.
+   Лимит Samba влияет на объём, который видит macOS, по размеру sparsebundle.
+   Реальное свободное место зависит и от других данных на томе.
+3. Нажмите «Проверить подключение», затем «Применить». Для проверки действующего
+   подключения введите пароль снова и нажмите «Проверить подключение».
+   Если цель не видна по Bonjour, откройте Finder → «Переход» → «Подключение к
+   серверу», введите адрес из «Диагностики» и выберите подключённый ресурс в
+   настройках Time Machine. Автообнаружение зависит от доступа к штатному
+   Avahi через системную D-Bus.
+
+Пока мастер включён, USB-тома и старые ссылки `local-*` скрываются из
+агрегированного ресурса и ACL-ресурсов этой панели. Настроенные сетевые
+ресурсы продолжают работать. При переключении режима и повторном подключении
+тома управляемая Samba может кратковременно переподключить клиентов. Профиль
+привязан к UUID, и при исчезновении тома публикация снимается до его возврата.
+
 ## Обновления
 
-Панель обращается напрямую к GitHub Releases API:
+Начиная с версии 1.8.1, кнопка «Настройки → Проверить обновления» обращается
+к [релизам FlyMater](https://github.com/FlyMater/keenetic-smb-ui-tm/releases).
+На более ранней версии скачайте новый пакет и установите его вручную.
 
 - **Проверка** сравнивает текущую версию с последним тегом и выбирает ассет под
   архитектуру устройства (`opkg status keenetic-smb-ui`, затем `uname -m`).
 - **Установка** скачивает `.ipk` через `curl`, запускает
   `opkg install --force-reinstall` и перезапускает службу в фоне. Конфиг помечен
-  как `conffile`, поэтому переживает обновление.
+  как `conffile`, поэтому переживает обновление. Ошибки установки записываются
+  в `/opt/var/keenetic-smb-ui/log/app.log`.
+
+Порядок публикации пакетов описан в [CONTRIBUTING.md](CONTRIBUTING.md#release-process).
+
+### Обновление с сохранением настроек
+
+Скопируйте новый пакет и предыдущий рабочий `.ipk` на роутер. Выполните по SSH
+под root. Укажите существующий локальный каталог для пакетов и копии,
+за пределами SMB-ресурсов, который сохранится при перезапуске роутера.
+
+```sh
+cd /путь/к/пакетам
+VERSION=1.8.3 # версия нового пакета
+umask 077
+/opt/etc/init.d/S99keenetic-smb-ui stop
+tar -czf keenetic-smb-ui-before-update.tar.gz -C /opt \
+  etc/keenetic-smb-ui etc/samba/private
+opkg update
+opkg install "./keenetic-smb-ui_${VERSION}_aarch64-3.10.ipk"
+/opt/etc/init.d/S99keenetic-smb-ui status
+```
+
+Архив содержит настройки и базу Samba. Откройте панель
+`http://<ip-роутера>:8099` и проверьте вход, прежние ресурсы и настройки.
+
+Для отката остановите службу, восстановите архив и установите предыдущую
+версию пакета. В примере предыдущая версия — 1.8.2.
+
+```sh
+/opt/etc/init.d/S99keenetic-smb-ui stop
+tar -xzf keenetic-smb-ui-before-update.tar.gz -C /opt
+opkg --force-downgrade install ./keenetic-smb-ui_1.8.2_aarch64-3.10.ipk
+/opt/etc/init.d/S99keenetic-smb-ui status
+```
 
 ## Конфигурация
 
@@ -350,9 +408,6 @@ SMB-шарой со своим списком пользователей.
 | `x64-3.2` | 7.5 МБ | собрано, работает под Entware x86_64 |
 | `x86-2.6` | 7.3 МБ | собрано, работает под Entware i386 |
 
-Samba и её зависимости лежат в нашем релизе для четырёх архитектур Keenetic, так что
-работа роутера не зависит от того, останутся ли эти пакеты в фиде Entware.
-
 ## Безопасность
 
 - Панель: HTTP basic + `HttpOnly` cookie-сессия, опциональный режим «только
@@ -386,85 +441,3 @@ https://github.com/tommilevs/keenetic-smb-ui
 <div align="center">
 <sub>Сделано для роутеров Keenetic на Entware. Не связано с Keenetic Ltd.</sub>
 </div>
-
-## Time Machine
-
-Для Cudy WBR3000UAX с Keenetic Ported 5.01.C.10.0-0 используйте
-`keenetic-smb-ui_1.8.0_aarch64-3.10.ipk`. Мастер использует Samba 4.24.5 из
-Entware и IPv4, который панель назначает Samba как отдельный адрес `/32` на
-LAN-интерфейсе. В настройках Entware Samba должен быть доступен TCP 445.
-
-1. Откройте в панели раздел «Time Machine» и выберите USB-том. Пустое поле
-   каталога означает корень тома. Чтобы мастер создал каталог с правами
-   выделенного пользователя, укажите имя и включите «Создать каталог при
-   применении». Для существующего каталога права проверяются под выделенным
-   пользователем. Мастер не меняет владельцев и права существующих каталогов.
-2. Задайте имя ресурса, свободное имя Unix-пользователя и пароль. Для резервных
-   копий оставьте запись включённой. Укажите лимит в ГиБ или оставьте ноль.
-   Лимит Samba влияет на объём, который видит macOS, по размеру sparsebundle.
-   Реальное свободное место зависит и от других данных на томе.
-3. Нажмите «Проверить подключение», затем «Применить». Для проверки действующего
-   подключения введите пароль снова и нажмите «Проверить подключение».
-   Если цель не видна по Bonjour, откройте Finder → «Переход» → «Подключение к
-   серверу», введите адрес из «Диагностики» и выберите подключённый ресурс в
-   настройках Time Machine. Автообнаружение зависит от доступа к штатному
-   Avahi через системную D-Bus.
-
-Пока мастер включён, USB-тома и старые ссылки `local-*` скрываются из
-агрегированного ресурса и ACL-ресурсов этой панели. Настроенные сетевые
-ресурсы продолжают работать. При переключении режима и повторном подключении
-тома управляемая Samba может кратковременно переподключить клиентов. Профиль
-привязан к UUID, и при исчезновении тома публикация снимается до его возврата.
-
-### Обновление с сохранением настроек
-
-Скопируйте новый пакет и предыдущий рабочий `.ipk` на роутер. Выполните по SSH
-под root. Укажите существующий локальный каталог для пакетов и копии,
-за пределами SMB-ресурсов, который сохранится при перезапуске роутера.
-
-```sh
-cd /путь/к/пакетам
-umask 077
-/opt/etc/init.d/S99keenetic-smb-ui stop
-tar -czf keenetic-smb-ui-before-1.8.0.tar.gz -C /opt \
-  etc/keenetic-smb-ui etc/samba/private
-opkg update
-opkg install ./keenetic-smb-ui_1.8.0_aarch64-3.10.ipk
-/opt/etc/init.d/S99keenetic-smb-ui status
-```
-
-Архив содержит настройки и базу Samba. Откройте панель
-`http://<ip-роутера>:8099` и проверьте вход, прежние ресурсы и настройки.
-После обновления с версии 1.7.0 мастер остаётся выключенным до первого
-применения.
-
-Для отката остановите службу, восстановите архив и установите предыдущую
-версию пакета. Пример для версии 1.7.0.
-
-```sh
-/opt/etc/init.d/S99keenetic-smb-ui stop
-tar -xzf keenetic-smb-ui-before-1.8.0.tar.gz -C /opt
-opkg --force-downgrade install ./keenetic-smb-ui_1.7.0_aarch64-3.10.ipk
-/opt/etc/init.d/S99keenetic-smb-ui status
-```
-
-### Обновления через панель
-
-Начиная с версии `1.8.1`, кнопка «Проверить обновления» обращается к
-[GitHub Releases репозитория FlyMater/keenetic-smb-ui-tm](https://github.com/FlyMater/keenetic-smb-ui-tm/releases).
-На роутере со старой версией установите `1.8.1` вручную по инструкции выше.
-Для следующих обновлений опубликуйте обычный релиз с тегом `vX.Y.Z` и
-приложите пакет `keenetic-smb-ui_X.Y.Z_aarch64-3.10.ipk` для ARM64.
-Слияние PR в `main` само по себе релиз не создаёт.
-
-Пример сборки пакета для следующего релиза из обновлённого `main`.
-
-```sh
-make ipk ARCH=arm64 VERSION=1.8.2
-```
-
-После публикации `v1.8.2` панель предложит этот пакет при проверке и
-передаст его `opkg` по кнопке «Установить». Ошибки установки выводятся в
-`/opt/var/keenetic-smb-ui/log/app.log`.
-
-<sub>Сделано для роутеров Keenetic на Entware. Не связано с Keenetic Ltd.</sub>

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
 )
 
 func TestTimeMachineAPI(t *testing.T) {

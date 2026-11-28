@@ -3,7 +3,7 @@ package web
 import (
 	"net/http"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/update"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/update"
 )
 
 // handleUpdate checks GitHub for a newer release (GET) or installs it (POST).

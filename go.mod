@@ -1,4 +1,4 @@
-module github.com/tommilevs/keenetic-smb-ui
+module github.com/FlyMater/keenetic-smb-ui-tm
 
 go 1.23
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
 )
 
 // User is an SMB account served by the application's Samba instance.

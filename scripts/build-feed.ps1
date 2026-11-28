@@ -1,17 +1,22 @@
+param(
+  [Parameter(Mandatory = $true)]
+  [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+  [string]$Version
+)
+
 $ErrorActionPreference = 'Stop'
-$root = 'C:\workspace\dsh\projects\keenetic-smb-ui'
+$root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root 'dist'
 $feedSrc = Join-Path $dist 'feed'
 $rel = Join-Path $feedSrc 'release'
 New-Item -ItemType Directory -Force -Path $rel | Out-Null
 Get-ChildItem $rel -File | Remove-Item -Force
 
-$version = '1.5.0'
 $appArches = @('aarch64-3.10', 'armv7-3.2', 'mipsel-3.4', 'mips-3.4', 'x64-3.2', 'x86-2.6')
 
 # 1. copy app packages
 foreach ($a in $appArches) {
-  $src = Join-Path $dist "keenetic-smb-ui_${version}_${a}.ipk"
+  $src = Join-Path $dist "keenetic-smb-ui_${Version}_${a}.ipk"
   if (Test-Path $src) { Copy-Item $src (Join-Path $rel (Split-Path $src -Leaf)) }
 }
 
@@ -53,13 +58,13 @@ foreach ($r in $depRows) {
   [void]$sb.Append($stanza)
 }
 foreach ($a in $appArches) {
-  $file = "keenetic-smb-ui_${version}_${a}.ipk"
+  $file = "keenetic-smb-ui_${Version}_${a}.ipk"
   $full = Join-Path $rel $file
   if (-not (Test-Path $full)) { continue }
   $sha = (Get-FileHash $full -Algorithm SHA256).Hash.ToLower()
   $stanza = Stanza @(
     "Package: keenetic-smb-ui",
-    "Version: $version",
+    "Version: $Version",
     "Depends: libc, samba4-server, samba4-client",
     "Architecture: $a",
     "Filename: $file",

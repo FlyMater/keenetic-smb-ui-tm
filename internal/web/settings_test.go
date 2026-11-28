@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tommilevs/keenetic-smb-ui/internal/acl"
-	"github.com/tommilevs/keenetic-smb-ui/internal/config"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
 )
 
 func TestSaveSettingsPreservesSMB(t *testing.T) {

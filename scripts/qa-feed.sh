@@ -1,6 +1,6 @@
 #!/bin/sh
 export PATH=/opt/sbin:/opt/bin:$PATH
-FEED=https://github.com/tommilevs/keenetic-smb-ui/releases/download/v1.5.0
+FEED="${1:-https://github.com/FlyMater/keenetic-smb-ui-tm/releases/latest/download}"
 CONF=/tmp/ours-only.conf
 LISTS=/tmp/ours-only-lists
 

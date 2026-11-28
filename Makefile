@@ -45,7 +45,7 @@ build:
 		os=$${t%/*}; arch=$${t#*/}; \
 		echo "building $$os/$$arch"; \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
-			$(GO) build -trimpath -ldflags "-s -w -X github.com/tommilevs/keenetic-smb-ui/internal/web.Version=$(VERSION)" \
+			$(GO) build -trimpath -ldflags "-s -w -X github.com/FlyMater/keenetic-smb-ui-tm/internal/web.Version=$(VERSION)" \
 			-o $(OUT)/$(APP)_$${os}_$${arch} ./cmd/keenetic-smb-ui || exit 1; \
 	done
 	@ls -lh $(OUT)

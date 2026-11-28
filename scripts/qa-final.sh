@@ -1,10 +1,14 @@
 #!/bin/sh
 # Final acceptance check on the router
 export PATH=/opt/sbin:/opt/bin:$PATH
-echo "=== install release 1.1.0 via opkg"
-curl -fsSL -o /tmp/k110.ipk https://github.com/tommilevs/keenetic-smb-ui/releases/download/v1.1.0/keenetic-smb-ui_1.1.0_aarch64-3.10.ipk
-opkg install --force-reinstall /tmp/k110.ipk 2>&1 | tail -3
-rm -f /tmp/k110.ipk
+VERSION=${1:?Usage: qa-final.sh <version, e.g. 1.8.3>}
+PACKAGE=keenetic-smb-ui_${VERSION}_aarch64-3.10.ipk
+DOWNLOAD_DIR=$(mktemp -d /tmp/keenetic-smb-ui.XXXXXX) || exit 1
+DOWNLOAD="$DOWNLOAD_DIR/$PACKAGE"
+trap 'rm -f "$DOWNLOAD"; rmdir "$DOWNLOAD_DIR"' EXIT
+echo "=== install release $VERSION via opkg"
+curl -fsSL -o "$DOWNLOAD" "https://github.com/FlyMater/keenetic-smb-ui-tm/releases/download/v${VERSION}/$PACKAGE" || exit 1
+opkg install --force-reinstall "$DOWNLOAD" || exit 1
 sleep 5
 
 echo "=== package"

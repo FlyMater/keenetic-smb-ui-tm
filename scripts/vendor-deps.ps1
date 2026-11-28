@@ -8,7 +8,7 @@ $Arches = @(
   'mipselsf-k3.4',
   'mipssf-k3.4'
 )
-$OutDir = 'C:\workspace\dsh\projects\keenetic-smb-ui\dist\feed'
+$OutDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist/feed'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $report = @()
