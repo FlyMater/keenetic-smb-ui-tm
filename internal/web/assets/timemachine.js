@@ -2,7 +2,7 @@
 
 const tmEndpoint = '/api/time-machine';
 let tmBrowsePath = '';
-let tmPending = false;
+const tmActionButtons = [$('tm-apply'), $('tm-check')];
 
 function tmMessage(message) {
   $('tm-message').textContent = t(message);
@@ -60,7 +60,7 @@ function tmRenderDiagnostics(report) {
 }
 
 async function loadTimeMachine() {
-  if (tmPending) return;
+  if ($('tm-apply').disabled) return;
   $('tm-password').value = '';
   $('tm-create').checked = false;
   $('tm-directory-picker').classList.add('hidden');
@@ -103,9 +103,7 @@ async function tmListFolders(path) {
 }
 
 async function tmAction(action) {
-  if (tmPending || !$('tm-form').reportValidity()) return;
-  tmPending = true;
-  $('tm-apply').disabled = $('tm-check').disabled = true;
+  if ($('tm-apply').disabled || !$('tm-form').reportValidity()) return;
   const payload = {
     enabled: $('tm-enabled').checked,
     uuid: $('tm-volume').value,
@@ -118,23 +116,22 @@ async function tmAction(action) {
     bonjour: $('tm-bonjour').checked,
     create_folder: $('tm-create').checked,
   };
-  try {
-    const result = await api(tmEndpoint + '/' + action, { method: 'POST', body: JSON.stringify(payload) });
-    tmMessage({
-      applied: 'Настройки применены',
-      connected: 'Подключение SMB проверено',
-      preflight: 'Предварительные проверки пройдены. Для проверки SMB примените настройки и введите пароль.',
-      preflight_pending_account_or_folder: 'Предварительные проверки пройдены. Права и xattr будут проверены при применении.',
-    }[result.status]);
-    tmRenderDiagnostics(result.diagnostics);
-    if (action === 'apply') $('tm-create').checked = false;
-  } catch (error) {
-    tmMessage(error.message);
-  } finally {
-    $('tm-password').value = '';
-    $('tm-apply').disabled = $('tm-check').disabled = false;
-    tmPending = false;
-  }
+  const progress = action === 'apply' ? 'Применяю настройки Time Machine…' : 'Проверяю подключение Time Machine…';
+  await runButtonAction(tmActionButtons, $('tm-message'), progress, async () => {
+    try {
+      const result = await api(tmEndpoint + '/' + action, { method: 'POST', body: JSON.stringify(payload) });
+      tmMessage({
+        applied: 'Настройки применены',
+        connected: 'Подключение SMB проверено',
+        preflight: 'Предварительные проверки пройдены. Для проверки SMB примените настройки и введите пароль.',
+        preflight_pending_account_or_folder: 'Предварительные проверки пройдены. Права и xattr будут проверены при применении.',
+      }[result.status]);
+      tmRenderDiagnostics(result.diagnostics);
+      if (action === 'apply') $('tm-create').checked = false;
+    } finally {
+      $('tm-password').value = '';
+    }
+  });
 }
 
 $('tm-form').addEventListener('submit', (event) => {
