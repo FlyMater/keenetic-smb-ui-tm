@@ -36,5 +36,11 @@
   "enable managed Samba before configuring Time Machine": "Включите управляемую Samba перед настройкой Time Machine",
   "configured Samba IP is not assigned as a dedicated /32 address on the LAN interface": "На LAN-интерфейсе отсутствует отдельный IP Samba с маской /32",
   "Avahi name collision": "Имя Bonjour уже используется",
-  "Avahi registration failed": "Не удалось зарегистрировать Bonjour"
+  "Avahi registration failed": "Не удалось зарегистрировать Bonjour",
+  "invalid local disk request": "Недопустимые настройки USB-дисков.",
+  "invalid or duplicate USB volume UUID": "Некорректный или повторяющийся UUID USB-тома.",
+  "publish the USB disk before enabling Time Machine": "Отметьте публикацию USB-диска по SMB, чтобы включить Time Machine.",
+  "only one manual Time Machine resource can be imported at a time": "За одно применение можно перенести один ресурс Time Machine.",
+  "aggregate is on USB storage or contains USB mount paths": "Путь общей шары пересекается с путём монтирования USB-дисков.",
+  "aggregate contains a USB mount": "В общей шаре найдено стороннее монтирование USB-тома."
 }

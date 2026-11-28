@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
 )
 
@@ -13,7 +14,7 @@ func testConfig(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := config.Default()
 	cfg.SMB.SharePath = t.TempDir()
-	cfg.TimeMachine = &config.TimeMachine{Enabled: true, Share: "Mac Studio", User: "tm_mac", LimitGiB: 100}
+	cfg.TimeMachine = &config.TimeMachine{Enabled: true, UUID: "123", Share: "Mac Studio", User: "tm_mac", LimitGiB: 100}
 	cfg.Folders = []config.Folder{{Name: "usb-old", Path: "local-123/old", Enabled: true}}
 	return cfg
 }
@@ -22,13 +23,13 @@ func TestRenderTimeMachineIsolation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.SMB.MinProtocol = "NT1"
 	target := filepath.Join(t.TempDir(), "volume")
-	render := RenderWithTimeMachine(cfg, target)
+	render := RenderDisks(cfg, map[string]string{"123": target}, nil)
 	regular, tm, ok := strings.Cut(render, "\n[Mac Studio]\n")
 	if !ok {
 		t.Fatal("missing Time Machine resource")
 	}
 	for _, required := range []string{"server min protocol = SMB2", "multicast dns register = no",
-		"follow symlinks = no", "veto files = /local-*/", "invalid users = tm_mac"} {
+		"wide links = no", "invalid users = tm_mac"} {
 		if !strings.Contains(regular, required) {
 			t.Errorf("missing %q from existing shares", required)
 		}
@@ -43,13 +44,13 @@ func TestRenderTimeMachineIsolation(t *testing.T) {
 	if strings.Contains(tm, "force user") || strings.Contains(regular, "[usb-old]") {
 		t.Fatal("unsafe Samba export")
 	}
-	if rendered := Render(cfg); !strings.Contains(rendered, "veto files = /local-*/") ||
+	if rendered := RenderDisks(cfg, nil, nil); !strings.Contains(rendered, "wide links = no") ||
 		strings.Contains(rendered, "[Mac Studio]") {
 		t.Fatal("absent USB volume must leave isolation enabled without exporting an empty path")
 	}
 	cfg.SMB.MinProtocol = "SMB3_11"
 	cfg.TimeMachine.ReadOnly = true
-	render = RenderWithTimeMachine(cfg, target)
+	render = RenderDisks(cfg, map[string]string{"123": target}, nil)
 	if !strings.Contains(render, "server min protocol = SMB3_11") ||
 		!strings.Contains(render, "fruit:time machine = no") || strings.Contains(render, "time machine max size") {
 		t.Fatal("read-only exposure must keep stronger SMB minimum and suppress Time Machine capability")
@@ -223,5 +224,37 @@ func TestManagedSambaProcess(t *testing.T) {
 		if got := managedProcess(test.exe, []byte(test.args), conf); got != test.want {
 			t.Errorf("managedProcess(%q, %q) = %t, want %t", test.exe, test.args, got, test.want)
 		}
+	}
+}
+
+func TestRenderSeveralBackupSharesAndOrdinaryUSBAccess(t *testing.T) {
+	cfg := config.Default()
+	cfg.SMB.Users = []config.User{{Name: "backup", Enabled: true}}
+	cfg.Folders = []config.Folder{
+		{Name: "Files one", Path: "local-one/files", Enabled: true, Rules: []acl.Rule{{User: "backup", Access: string(acl.ReadWrite)}}},
+		{Name: "Files two", Path: "local-two/files", Enabled: true, Rules: []acl.Rule{{User: "backup", Access: string(acl.ReadWrite)}}},
+		{Name: "Unselected", Path: "local-other/files", Enabled: true, Rules: []acl.Rule{{User: "backup", Access: string(acl.ReadWrite)}}},
+	}
+	for _, uuid := range []string{"one", "two"} {
+		cfg.LocalDisks = append(cfg.LocalDisks, config.LocalDisk{
+			UUID: uuid, Publish: true, Directory: "local-" + uuid,
+			TimeMachine: &config.TimeMachine{Enabled: true, User: "backup", SMBUser: true, Share: "Backup " + uuid},
+		})
+	}
+	out := RenderDisks(cfg, map[string]string{"one": "/test/1", "two": "/test/2"}, map[string]bool{"local-one": true, "local-two": true})
+	for _, section := range []string{"[all]", "[Files one]", "[Files two]", "[Backup one]", "[Backup two]"} {
+		if !strings.Contains(out, section) {
+			t.Errorf("missing %s", section)
+		}
+	}
+	if strings.Contains(out, "[Unselected]") || strings.Contains(out, "invalid users = backup") {
+		t.Fatal("unselected disk was exposed or shared user was blocked")
+	}
+	global, _, _ := strings.Cut(out, "\n[all]\n")
+	if !strings.Contains(global, "vfs objects = catia fruit streams_xattr") {
+		t.Fatal("ordinary shares must support AAPL when backup targets are active")
+	}
+	if strings.Count(out, "fruit:time machine = yes") != 2 {
+		t.Fatal("each active backup share must advertise Time Machine capability")
 	}
 }

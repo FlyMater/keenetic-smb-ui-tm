@@ -120,7 +120,7 @@ func ValidateTimeMachine(cfg *config.Config, target string) error {
 	}
 	for _, folder := range cfg.Folders {
 		rel := acl.CleanPath(folder.Path)
-		if !folder.Enabled || rel == "" || IsLocalPath(rel) {
+		if !folder.Enabled || rel == "" || LocalDirectory(rel) != "" {
 			continue
 		}
 		if rel == ".." || strings.HasPrefix(rel, "../") || strings.ContainsAny(rel, "\r\n\\%\x00") {
@@ -137,7 +137,7 @@ func ValidateTimeMachine(cfg *config.Config, target string) error {
 			}
 		}
 	}
-	if strings.Contains(strings.ToLower(RenderWithTimeMachine(cfg, "")), "\n["+strings.ToLower(p.Share)+"]\n") {
+	if strings.Contains(strings.ToLower(RenderDisks(cfg, nil, nil)), "\n["+strings.ToLower(p.Share)+"]\n") {
 		return errors.New("Time Machine share name is already in use")
 	}
 	return nil
@@ -174,13 +174,13 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-func ValidateCandidate(ctx context.Context, cfg *config.Config, target string) error {
+func ValidateCandidate(ctx context.Context, cfg *config.Config, targets map[string]string, local map[string]bool) error {
 	f, err := os.CreateTemp("", "keenetic-smb-testparm-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	_, err = f.WriteString(RenderWithTimeMachine(cfg, target))
+	_, err = f.WriteString(RenderDisks(cfg, targets, local))
 	closeErr := f.Close()
 	if err := errors.Join(err, closeErr); err != nil {
 		return err

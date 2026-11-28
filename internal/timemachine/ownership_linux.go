@@ -12,6 +12,10 @@ import (
 	"syscall"
 )
 
+// O_PATH is part of the Linux ABI on the project's target architectures.
+// The frozen syscall package omits it on amd64, 386 and arm.
+const openPath = 0x200000
+
 type ownershipEntry struct {
 	Path           string
 	Inode          uint64
@@ -30,7 +34,7 @@ func (t *Target) openOwnershipEntry(path string) (*os.File, syscall.Stat_t, erro
 	parent := int(t.file.Fd())
 	var file *os.File
 	for i, part := range parts {
-		flags := syscall.O_PATH | syscall.O_CLOEXEC | syscall.O_NOFOLLOW
+		flags := openPath | syscall.O_CLOEXEC | syscall.O_NOFOLLOW
 		if i < len(parts)-1 {
 			flags |= syscall.O_DIRECTORY
 		}

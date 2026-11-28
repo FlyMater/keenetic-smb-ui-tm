@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,11 +22,19 @@ const (
 type Announcement struct {
 	Interface string
 	IP        string
-	Share     string
+	Shares    []string
 }
 
 func (a Announcement) Host() string {
 	return "keenetic-tm-" + strings.ReplaceAll(a.IP, ".", "-") + ".local"
+}
+
+func (a Announcement) diskRecords() [][]byte {
+	records := [][]byte{[]byte("sys=adVF=0x100")}
+	for i, share := range a.Shares {
+		records = append(records, []byte(fmt.Sprintf("dk%d=adVN=%s,adVF=0x82", i, share)))
+	}
+	return records
 }
 
 type Bonjour struct {
@@ -44,7 +53,8 @@ func (b *Bonjour) Close() {
 func (b *Bonjour) Publish(ctx context.Context, a Announcement) error {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	if b.current == a && b.group != nil && b.established(ctx) == nil {
+	if b.current.Interface == a.Interface && b.current.IP == a.IP &&
+		slices.Equal(b.current.Shares, a.Shares) && b.group != nil && b.established(ctx) == nil {
 		return nil
 	}
 	b.Close()
@@ -107,8 +117,7 @@ func (b *Bonjour) publish(ctx context.Context, index int32, a Announcement) erro
 		return err
 	}
 	if err := call("AddService", index, ipv4Protocol, uint32(0), instance,
-		"_adisk._tcp", "local", host, uint16(9),
-		[][]byte{[]byte("sys=adVF=0x100"), []byte("dk0=adVN=" + a.Share + ",adVF=0x82")}); err != nil {
+		"_adisk._tcp", "local", host, uint16(9), a.diskRecords()); err != nil {
 		return err
 	}
 	if err := call("Commit"); err != nil {

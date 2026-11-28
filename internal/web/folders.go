@@ -8,7 +8,6 @@ import (
 
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/acl"
 	"github.com/FlyMater/keenetic-smb-ui-tm/internal/config"
-	"github.com/FlyMater/keenetic-smb-ui-tm/internal/samba"
 )
 
 // handleFolders lists folder ACLs (GET) or replaces them (POST). The UI also
@@ -54,10 +53,7 @@ func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.cfg.Update(func(c *config.Config) error {
 			c.Folders = payload.Folders
-			if tmEnabled(c) {
-				return samba.ValidateTimeMachine(c, tmPath(c))
-			}
-			return nil
+			return s.validateDiskLayout(c)
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -245,5 +245,18 @@
   "В репозитории пока нет опубликованных релизов": "There are no published releases in this repository",
   "Тег релиза должен быть в формате v1.2.3": "The release tag must have the format v1.2.3",
   "размер пакета не совпадает с данными релиза": "The package size does not match the release metadata",
-  "контрольная сумма пакета не совпадает с данными релиза": "The package checksum does not match the release metadata"
+  "контрольная сумма пакета не совпадает с данными релиза": "The package checksum does not match the release metadata",
+  "USB-диски": "USB disks",
+  "Публиковать по SMB": "Publish over SMB",
+  "Применить выбор дисков": "Apply disk selection",
+  "Обновить список дисков": "Refresh disk list",
+  "Применяю настройки USB-дисков…": "Applying USB disk settings…",
+  "USB-диски не найдены": "No USB disks found",
+  "Time Machine доступен": "Time Machine is available",
+  "Есть изменения": "Unsaved changes",
+  "Настроить": "Configure",
+  "Подключение SMB проверено.": "SMB connection verified.",
+  "Том и права проверены. Примените настройки.": "Disk and permissions verified. Apply the settings.",
+  "Проверьте подключение через Finder.": "Check the connection in Finder.",
+  "Права будут проверены после смены владельца.": "Permissions will be checked after the ownership change."
 }
